@@ -17,6 +17,7 @@ dependencies = [
     "opencv-python>=5.0.0.93",
     "pyqtgraph>=0.14.0",
     "pyside6>=6.11.1",
+    "qtawesome>=1.4.2",
     "scikit-image>=0.26.0",
     "tifffile>=2026.6.1",
 ]

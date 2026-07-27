@@ -16,39 +16,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .. import io
 from .image_view import COLORMAPS, ImageView
 from .roi import EllipseFitROI, LineProfileROI, RectRegionROI
+from .icons import AppIcons, logo_icon, logo_pixmap
+
 
 APP_NAME = "DFXM OptiCalc"
 APP_VERSION = "0.1.0"
-ASSETS = Path(__file__).resolve().parent / "assets"
-ICON_DIR = ASSETS / "icons"
-
-
-def tinted_icon(name: str, color: str) -> "QtGui.QIcon":
-    """Load a black/transparent PNG glyph and recolor it (theme-aware)."""
-    src = QtGui.QPixmap(str(ICON_DIR / f"{name}.png"))
-    if src.isNull():
-        return QtGui.QIcon()
-    out = QtGui.QPixmap(src.size())
-    out.fill(QtCore.Qt.transparent)
-    p = QtGui.QPainter(out)
-    p.drawPixmap(0, 0, src)
-    p.setCompositionMode(QtGui.QPainter.CompositionMode_SourceIn)
-    p.fillRect(out.rect(), QtGui.QColor(color))
-    p.end()
-    return QtGui.QIcon(out)
-
-
-def logo_icon() -> "QtGui.QIcon":
-    return QtGui.QIcon(str(ASSETS / "logo.png"))
-
-
-def logo_pixmap(size: int = 120) -> "QtGui.QPixmap":
-    pm = QtGui.QPixmap(str(ASSETS / "logo.png"))
-    if pm.isNull():
-        return pm
-    return pm.scaled(
-        size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
-    )
 
 
 @dataclass
@@ -85,6 +57,7 @@ class DocumentSession:
 
     def rois_of_type(self, roi_type: str) -> list:
         return [r for r in self.roi_objects.values() if r.roi_type == roi_type]
+
 
 _STYLE_TMPL = """
 QMainWindow { background: %BASE%; }
@@ -136,7 +109,32 @@ QToolButton { border: 1px solid transparent; border-radius: 5px; padding: 3px 6p
 QToolButton:hover { background: %HOVER%; border-color: %BORDER2%; }
 QToolButton:checked { background: %ACCBG%; color: %SELTEXT%; }
 QScrollArea { border: 1px solid %BORDER%; }
-QCheckBox { padding: 2px 0; }
+
+QCheckBox { 
+    padding: 2px 0; 
+    spacing: 6px;
+}
+
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid %BORDER2%;
+    border-radius: 3px;
+    background: %INPUT%;
+}
+
+QCheckBox::indicator:hover {
+    border-color: %ACCENT%;
+}
+
+QCheckBox::indicator:checked {
+    width: 14px;
+    height: 14px;
+    background: %ACCENT%;
+    border: 1px solid %ACCENT%;
+    image: url("%CHECKMARK_ICON%");
+    padding: 0px;
+}
 QLabel { background: transparent; }
 
 QSlider::groove:horizontal { height: 4px; background: %HOVER2%; border-radius: 2px; }
@@ -203,6 +201,13 @@ def build_style(theme: str) -> str:
     s = _STYLE_TMPL
     for k, v in toks.items():
         s = s.replace("%" + k + "%", v)
+    
+    # qtawesome 체크마크 아이콘을 임시 PNG로 저장하여 QSS에 주입
+    check_pix = AppIcons.get_pixmap(AppIcons.CHECK, size=12, color="#ffffff")
+    tmp_check_path = Path(tempfile.gettempdir()) / "dfxm_qta_check.png"
+    check_pix.save(str(tmp_check_path))
+    
+    s = s.replace("%CHECKMARK_ICON%", str(tmp_check_path).replace("\\", "/"))
     return s
 
 
@@ -392,6 +397,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
 
 class MainWindow(QtWidgets.QMainWindow):
+    _SUPPORTED = io.H5_SUFFIXES + io.IMAGE_SUFFIXES + io.TEXT_SUFFIXES
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -424,6 +431,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._docs: dict[QtWidgets.QWidget, dict] = {}
         self._current_tool = "select"
         self._cmap_syncing = False
+        self.apply_theme(self._theme)
 
         self._build_file_dock()
         self._build_control_dock()
@@ -436,21 +444,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._overlay = DropOverlay(self)
 
         self._restore_session()
-        self.apply_theme(self._theme)  # tint icons + canvas for the saved theme
 
     # ------------------------------------------------------ drag & drop
-    _SUPPORTED = io.H5_SUFFIXES + io.IMAGE_SUFFIXES + io.TEXT_SUFFIXES
-
     def _default_settings(self) -> dict:
         """Return initial view settings, inheriting current active control values."""
         return {
-            "log": self._log_chk.isChecked(),
-            "overmax": self._overmax_chk.isChecked(),
-            "colormap": self._cmap_combo.currentText(),
-            "scale_on": self._scale_chk.isChecked(),
-            "px_size": self._px_size_spin.value(),
-            "unit": self._unit_combo.currentText(),
-            "tool": self._current_tool,
+            "log": getattr(self, "_log_chk", None) and self._log_chk.isChecked() or False,
+            "overmax": getattr(self, "_overmax_chk", None) and self._overmax_chk.isChecked() or True,
+            "colormap": getattr(self, "_cmap_combo", None) and self._cmap_combo.currentText() or self._settings.value("def_cmap", "gray", type=str),
+            "scale_on": getattr(self, "_scale_chk", None) and self._scale_chk.isChecked() or False,
+            "px_size": getattr(self, "_px_size_spin", None) and self._px_size_spin.value() or 1.0,
+            "unit": getattr(self, "_unit_combo", None) and self._unit_combo.currentText() or self._settings.value("def_unit", "µm", type=str),
+            "tool": getattr(self, "_current_tool", "select"),
         }
 
     def _urls_have_supported(self, urls) -> bool:
@@ -529,21 +534,22 @@ class MainWindow(QtWidgets.QMainWindow):
         return None
 
     # ---------------------------------------------------------- theme + icons
-    def _themed_icon(self, name: str) -> QtGui.QIcon:
-        return tinted_icon(name, self._icon_color)
 
-    def _set_action_icon(self, action: QtGui.QAction, name: str) -> None:
-        self._icon_actions[action] = name
-        action.setIcon(self._themed_icon(name))
+    def _set_action_icon(self, action: QtGui.QAction, icon_name: str) -> None:
+        self._icon_actions[action] = icon_name
+        action.setIcon(AppIcons.get(icon_name, self._icon_color))
 
     def apply_theme(self, theme: str) -> None:
         self._theme = theme
         self._icon_color = "#d4d4d8" if theme == "Dark" else "#33333a"
         self.setStyleSheet(build_style(theme))
+        
+        # 등록된 Action 및 Button들 테마 색상 재적용
         for act, name in self._icon_actions.items():
-            act.setIcon(self._themed_icon(name))
+            act.setIcon(AppIcons.get(name, self._icon_color))
         for btn, name in self._icon_buttons.items():
-            btn.setIcon(self._themed_icon(name))
+            btn.setIcon(AppIcons.get(name, self._icon_color))
+            
         dark = theme == "Dark"
         for doc in self._docs.values():
             if doc.kind == "image" and doc.view is not None:
@@ -912,8 +918,6 @@ class MainWindow(QtWidgets.QMainWindow):
         return b
 
     def _ribbon_group(self, title: str, inner: QtWidgets.QLayout) -> QtWidgets.QWidget:
-        # PowerPoint style: NO box border. Buttons row + centered caption at the
-        # bottom; groups are separated only by thin vertical dividers.
         box = QtWidgets.QWidget()
         box.setObjectName("RibbonGroupBox")
         v = QtWidgets.QVBoxLayout(box)
@@ -959,6 +963,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._act_reset = self._act("⤢\n기본 줌", self._do_reset, "전체 보기 복귀")
         self._act_clear = self._act("🧹\n초기화", self._on_clear_fit, "측정/피팅 초기화")
         self._act_autolevel = self._act("📊\nAuto", self._do_autoscale, "Auto 레벨 0.5–99.5%")
+        self._act_fit = self._act("화면 맞춤", self._do_reset, "Fit to Window")
 
         # Tool actions (exclusive).
         self._tool_group = QtGui.QActionGroup(self)
@@ -981,25 +986,27 @@ class MainWindow(QtWidgets.QMainWindow):
             self._tool_actions[name] = act
         self._tool_actions["select"].setChecked(True)
 
-        # PNG icons (theme-tinted) replace emoji where we have artwork.
+        # PNG icons (theme-tinted)
         self._act_folder.setText("폴더")
-        self._set_action_icon(self._act_folder, "folder_open")
+        self._set_action_icon(self._act_folder, AppIcons.FOLDER)
         self._act_shot.setText("스크린샷")
-        self._set_action_icon(self._act_shot, "camera")
+        self._set_action_icon(self._act_shot, AppIcons.CAMERA)
         self._act_reset.setText("기본 줌")
-        self._set_action_icon(self._act_reset, "refresh")
+        self._set_action_icon(self._act_reset, AppIcons.DEFAULT_ZOOM)
+        self._set_action_icon(self._act_fit, AppIcons.DEFAULT_ZOOM)
+
         for tname, (lbl, icn) in {
-            "pan": ("이동", "hand"), "zoom": ("확대", "zoom_in"),
-            "distance": ("거리", "ruler"), "line": ("라인", "line"),
-            "ellipse": ("타원 피팅", "oval"),
+            "pan": ("이동", AppIcons.HAND), "zoom": ("확대", AppIcons.ZOOM_IN),
+            "distance": ("거리", AppIcons.RULER), "line": ("라인", AppIcons.LINE),
+            "ellipse": ("타원 피팅", AppIcons.OVAL),
         }.items():
             self._tool_actions[tname].setText(lbl)
             self._set_action_icon(self._tool_actions[tname], icn)
 
-        # ESC always returns to Select mode (state-machine reset).
+        # ESC always returns to Select mode
         esc = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Escape), self)
         esc.activated.connect(lambda: self._tool_actions["select"].trigger())
-        # Delete removes the ROI selected on the active canvas (or tree).
+        # Delete removes selected ROI
         dsc = QtGui.QShortcut(QtGui.QKeySequence.Delete, self)
         dsc.activated.connect(self._delete_selected_roi)
 
@@ -1011,7 +1018,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._det_combo.setMinimumWidth(120)
         self._det_combo.currentIndexChanged.connect(self._on_frame_selected)
 
-        # Panel-visibility toggles — labelled by WHICH UI window they show/hide.
+        # Panel-visibility toggles
         tog_file = self._file_dock.toggleViewAction()
         tog_file.setText("📂\n좌측 패널")
         tog_ctrl = self._control_dock.toggleViewAction()
@@ -1020,14 +1027,12 @@ class MainWindow(QtWidgets.QMainWindow):
         tog_ana.setText("📉\n하단 프로파일")
 
         # View-control actions.
-        self._act_fit = self._act("화면 맞춤", self._do_reset, "Fit to Window")
-        self._set_action_icon(self._act_fit, "refresh")
         self._act_zoom100 = self._act("💯\n100%", self._do_zoom100, "100% 확대")
         self._grid_chk_act = QtGui.QAction("▦\nGrid", self, checkable=True)
         self._grid_chk_act.setToolTip("눈금(Grid) 표시 On/Off")
         self._grid_chk_act.toggled.connect(self._do_grid)
 
-        # Ribbon quick colormap (mirrors the right-panel Colormap).
+        # Ribbon quick colormap
         self._ribbon_cmap = QtWidgets.QComboBox()
         self._ribbon_cmap.setIconSize(QtCore.QSize(72, 12))
         for name in COLORMAPS:
@@ -1050,8 +1055,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._rbtn(self._act_reset), self._rbtn(self._act_clear)))
         ribbon.addTab(self._ribbon_page([g_file, g_frame, g_edit]), "홈")
 
-        # Analyze — measurement & fitting tools (Fit/저장 live in the ellipse
-        # panel on the right, since they only apply while the ellipse tool is on).
+        # Analyze
         g_meas = self._ribbon_group("측정 / 피팅 도구", self._row(
             self._rbtn(self._tool_actions["distance"]),
             self._rbtn(self._tool_actions["line"]),
@@ -1059,7 +1063,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._rbtn(self._tool_actions["rect"])))
         ribbon.addTab(self._ribbon_page([g_meas]), "분석")
 
-        # View (보기): panel toggles + display + viewport, no name clashes.
+        # View
         g_panels = self._ribbon_group("패널 표시", self._row(
             self._toggle_btn(tog_file), self._toggle_btn(tog_ctrl),
             self._toggle_btn(tog_ana)))
@@ -1082,7 +1086,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._rbtn(self._tool_actions["zoom"])))
         ribbon.addTab(self._ribbon_page([g_tools]), "도구")
 
-        # Quick-access (top-left): file ops + frequently-used zoom / pan.
+        # Quick-access (top-left)
         qa = QtWidgets.QWidget()
         qh = QtWidgets.QHBoxLayout(qa)
         qh.setContentsMargins(6, 0, 6, 0)
@@ -1092,16 +1096,16 @@ class MainWindow(QtWidgets.QMainWindow):
         brand.setToolTip(APP_NAME)
         qh.addWidget(brand)
         qh.addWidget(self._qsep())
-        qh.addWidget(self._quick_btn("folder_open", self._open_file, "파일 열기"))
-        qh.addWidget(self._quick_btn("camera", self._screenshot, "스크린샷"))
+        
+        qh.addWidget(self._quick_btn(AppIcons.FOLDER, self._open_file, "파일 열기"))
+        qh.addWidget(self._quick_btn(AppIcons.CAMERA, self._screenshot, "스크린샷"))
         qh.addWidget(self._qsep())
-        qh.addWidget(self._quick_btn("hand", lambda: self._set_tool("pan"), "이동 도구"))
+        qh.addWidget(self._quick_btn(AppIcons.PAN, lambda: self._set_tool("pan"), "이동 도구"))
         qh.addWidget(self._quick_btn(
-            "zoom_out", lambda: self._cur_view() and self._cur_view().zoom_out(), "축소"))
+            AppIcons.ZOOM_OUT, lambda: self._cur_view() and self._cur_view().zoom_out(), "축소"))
         qh.addWidget(self._quick_btn(
-            "zoom_in", lambda: self._cur_view() and self._cur_view().zoom_in(), "확대"))
-        qh.addWidget(self._quick_btn("refresh", self._do_reset, "화면에 맞춤"))
-        ribbon.setCornerWidget(qa, QtCore.Qt.TopLeftCorner)
+            AppIcons.ZOOM_IN, lambda: self._cur_view() and self._cur_view().zoom_in(), "확대"))
+        qh.addWidget(self._quick_btn(AppIcons.DEFAULT_ZOOM, self._do_reset, "화면에 맞춤"))
 
         glob = QtWidgets.QWidget()
         gh = QtWidgets.QHBoxLayout(glob)
@@ -1160,21 +1164,13 @@ class MainWindow(QtWidgets.QMainWindow):
         b.setAutoRaise(True)
         return b
 
-    def _quick(self, emoji: str, slot, tip: str) -> QtWidgets.QToolButton:
-        b = QtWidgets.QToolButton()
-        b.setText(emoji)
-        b.setToolTip(tip)
-        b.setAutoRaise(True)
-        b.clicked.connect(slot)
-        return b
-
     def _quick_btn(self, icon_name: str, slot, tip: str) -> QtWidgets.QToolButton:
         b = QtWidgets.QToolButton()
         b.setToolTip(tip)
         b.setAutoRaise(True)
         b.clicked.connect(slot)
         self._icon_buttons[b] = icon_name
-        b.setIcon(self._themed_icon(icon_name))
+        b.setIcon(AppIcons.get(icon_name, self._icon_color))
         b.setIconSize(QtCore.QSize(18, 18))
         return b
 
@@ -1226,7 +1222,6 @@ class MainWindow(QtWidgets.QMainWindow):
              "*.jpeg", "*.bmp", "*.json", "*.txt"]
         )
         self._fs_model.setNameFilterDisables(False)
-        # Empty root -> show every drive / the whole filesystem (requirement 2).
         self._fs_model.setRootPath("")
 
         self._tree = QtWidgets.QTreeView()
@@ -1235,12 +1230,15 @@ class MainWindow(QtWidgets.QMainWindow):
         for col in (1, 2, 3):  # hide size / type / date
             self._tree.hideColumn(col)
         self._tree.setHeaderHidden(True)
-        # Single click = preview (reused tab); double click = pin new tab.
         self._tree.clicked.connect(self._on_tree_preview)
         self._tree.doubleClicked.connect(self._on_tree_open)
+
+        self._tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+
         tabs.addTab(self._tree, "파일")
 
-        # HDF5 structure viewer (requirement 1), HDFView style.
+        # HDF5 structure viewer
         self._struct_tree = QtWidgets.QTreeWidget()
         self._struct_tree.setColumnCount(4)
         self._struct_tree.setHeaderLabels(["이름", "종류", "shape", "dtype"])
@@ -1253,6 +1251,59 @@ class MainWindow(QtWidgets.QMainWindow):
         dock.setWidget(tabs)
         dock.setMinimumWidth(280)
         self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, dock)
+
+    # -------------------------------------------------- 파일 트리 컨텍스트 메뉴
+    def _on_tree_context_menu(self, pos: QtCore.QPoint) -> None:
+        index = self._tree.indexAt(pos)
+        if not index.isValid():
+            return
+
+        file_path_str = self._fs_model.filePath(index)
+        path = Path(file_path_str)
+
+        menu = QtWidgets.QMenu(self)
+
+        # 1. 파일 열기 (파일일 경우만)
+        if path.is_file():
+            icn_file = AppIcons.get(AppIcons.FILE, self._icon_color)
+            act_open = menu.addAction(icn_file, "파일 열기")
+            act_open.triggered.connect(lambda: self._open_document(path, preview=False))
+            menu.addSeparator()
+
+        # 2. 파일 탐색기에서 열기
+        icn_folder = AppIcons.get(AppIcons.FOLDER, self._icon_color)
+        act_explorer = menu.addAction(icn_folder, "파일 탐색기에서 열기")
+        act_explorer.triggered.connect(lambda: self._show_in_file_manager(path))
+
+        # 3. 경로 복사
+        icn_copy = AppIcons.get(AppIcons.COPY, self._icon_color)
+        act_copy_path = menu.addAction(icn_copy, "경로 복사")
+        act_copy_path.triggered.connect(lambda: self._copy_path_to_clipboard(path))
+
+        # 메뉴 출력
+        menu.exec_(self._tree.viewport().mapToGlobal(pos))
+
+    def _show_in_file_manager(self, path: Path) -> None:
+        """시스템 파일 탐색기(Windows Explorer 등)에서 해당 파일/폴더를 엽니다."""
+        abs_path = path.resolve()
+        if abs_path.is_file():
+            # Windows의 경우 파일 선택 상태로 탐색기 열기 지원
+            import platform
+            if platform.system() == "Windows":
+                import subprocess
+                subprocess.run(["explorer", "/select,", str(abs_path)])
+                return
+            target_url = QtCore.QUrl.fromLocalFile(str(abs_path.parent))
+        else:
+            target_url = QtCore.QUrl.fromLocalFile(str(abs_path))
+
+        QtGui.QDesktopServices.openUrl(target_url)
+
+    def _copy_path_to_clipboard(self, path: Path) -> None:
+        """클립보드에 파일/폴더 절대 경로를 복사합니다."""
+        abs_path = str(path.resolve())
+        QtWidgets.QApplication.clipboard().setText(abs_path)
+        self._status.showMessage(f"경로 복사됨: {abs_path}", 3000)
 
     # ------------------------------------------------------ control dock
     def _build_control_dock(self) -> None:
@@ -1291,8 +1342,6 @@ class MainWindow(QtWidgets.QMainWindow):
         overmax_row.addWidget(self._overmax_color_btn)
         dl.addRow(overmax_row)
 
-        dl.addRow(self._overmax_chk)
-
         self._cmap_combo = QtWidgets.QComboBox()
         self._cmap_combo.setIconSize(QtCore.QSize(96, 14))
         for name in COLORMAPS:
@@ -1304,7 +1353,7 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_auto.clicked.connect(self._do_autoscale)
         dl.addRow(btn_auto)
 
-        # Histogram: collapse (hide) + detach to a floating window.
+        # Histogram
         self._hist_chk = QtWidgets.QCheckBox("히스토그램 표시")
         self._hist_chk.setChecked(True)
         self._hist_chk.toggled.connect(self._do_hist_visible)
@@ -1318,7 +1367,7 @@ class MainWindow(QtWidgets.QMainWindow):
         dl.addRow(hist_row)
         v.addWidget(CollapsibleSection("디스플레이", disp))
 
-        # --- Scale section (collapsible): pixel scale bar -> real distance
+        # --- Scale section (collapsible)
         scale = QtWidgets.QWidget()
         sl = QtWidgets.QFormLayout(scale)
         sl.setContentsMargins(8, 4, 8, 4)
@@ -1341,7 +1390,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sl.addRow("단위", self._unit_combo)
         v.addWidget(CollapsibleSection("척도 (Scale bar)", scale))
 
-        # --- Tool-specific area: swaps with the active toolbar tool.
+        # --- Tool-specific area
         line = QtWidgets.QFrame()
         line.setFrameShape(QtWidgets.QFrame.HLine)
         line.setStyleSheet("color:#3a3a3a;")
@@ -1387,13 +1436,6 @@ class MainWindow(QtWidgets.QMainWindow):
             if s := self._cur_settings():
                 s["overmax_color"] = color.name()
                 self._log(f"Over-max highlight color: {color.name()}")
-
-    def _do_overmax_color(self, color_hex: str) -> None:
-        color = QtGui.QColor(color_hex)
-        if (v := self._cur_view()) and (s := self._cur_settings()):
-            v.set_overmax_color(color)
-            s["overmax_color"] = color.name()
-            self._log(f"Over-max highlight color: {color.name()}")
 
     # ----- tool pages -----
     def _build_view_page(self) -> QtWidgets.QWidget:
@@ -1505,7 +1547,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         tabs.addTab(self._profile_plot, "라인 프로파일")
 
-        # Per-file operation log (bound to the active document session).
+        # Per-file operation log
         self._log_view = QtWidgets.QPlainTextEdit()
         self._log_view.setReadOnly(True)
         self._log_view.setFont(QtGui.QFont("Consolas", 9))
@@ -1513,7 +1555,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._analysis_dock.setWidget(tabs)
         self.addDockWidget(QtCore.Qt.BottomDockWidgetArea, self._analysis_dock)
-        self._analysis_dock.hide()  # appears when the line tool is used
+        self._analysis_dock.hide()
 
     def _log(self, message: str) -> None:
         """Append a log line to the active document session and refresh view."""
@@ -1532,7 +1574,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._profile_curve.setData(axis, values)
         self._profile_plot.setLabel("bottom", f"거리 ({unit})")
         self._profile_plot.setLabel("left", "강도")
-        # Right-panel stats.
         vals = np.asarray(values, dtype=float)
         if vals.size:
             self._line_len.setText(f"{axis[-1]:.2f} {unit}")
@@ -1577,7 +1618,7 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_fit.clicked.connect(self._do_reset)
 
         self._zoom_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self._zoom_slider.setRange(10, 800)  # percent
+        self._zoom_slider.setRange(10, 800)
         self._zoom_slider.setValue(100)
         self._zoom_slider.setFixedWidth(120)
         self._zoom_slider.sliderMoved.connect(self._on_zoom_slider)
@@ -1599,7 +1640,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._zoom_slider.setValue(int(max(10, min(800, percent))))
 
     def _set_tree_root(self, folder: Path) -> None:
-        """Root the file tree AT this folder (VSCode-style), not the whole disk."""
+        """Root the file tree AT this folder, not the whole disk."""
         self._fs_model.setRootPath(str(folder))
         self._tree.setRootIndex(self._fs_model.index(str(folder)))
 
@@ -1610,7 +1651,7 @@ class MainWindow(QtWidgets.QMainWindow):
             cm = pg.colormap.get(name, source="matplotlib")
         except Exception:
             cm = pg.colormap.get("gray", source="matplotlib")
-        lut = cm.getLookupTable(0.0, 1.0, w, alpha=False)  # (w, 3) uint8
+        lut = cm.getLookupTable(0.0, 1.0, w, alpha=False)
         arr = np.ascontiguousarray(np.repeat(lut[np.newaxis, :, :], h, axis=0))
         qimg = QtGui.QImage(arr.data, w, h, 3 * w, QtGui.QImage.Format_RGB888)
         return QtGui.QIcon(QtGui.QPixmap.fromImage(qimg.copy()))
@@ -1626,13 +1667,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ------------------------------------------------------ session restore
     def _restore_session(self) -> None:
-        """Reopen at the previously used folder / file (requirement 4).
-
-        Never auto-restore a temp/cache path (e.g. from earlier scratch runs).
-        """
+        """Reopen at the previously used folder / file."""
         last_dir = self._settings.value("last_dir", "", type=str)
         if last_dir and Path(last_dir).exists() and not self._under_temp(last_dir):
-            self._set_tree_root(Path(last_dir))  # start where we left off
+            self._set_tree_root(Path(last_dir))
         elif self._under_temp(last_dir):
             self._settings.remove("last_dir")
 
@@ -1646,10 +1684,9 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             if self._under_temp(last_file):
                 self._settings.remove("last_file")
-            self._on_tab_changed()  # blank state
+            self._on_tab_changed()
 
     def _remember(self) -> None:
-        # Don't persist temp/cache paths (they vanish and shouldn't auto-open).
         if self._current_file is not None and not self._under_temp(self._current_file):
             self._settings.setValue("last_file", str(self._current_file))
             self._settings.setValue("last_dir", str(self._current_file.parent))
@@ -1727,14 +1764,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _open_document(self, path: Path, preview: bool = False) -> None:
         path = Path(path)
-        # Already open: refocus. Double-click (preview=False) pins a preview tab.
         for w, d in self._docs.items():
             if d.file_path == path:
                 if not preview and d.preview:
                     self._pin_tab(w)
                 self._tabs.setCurrentWidget(w)
                 return
-        # A single, reusable preview slot: opening a new preview drops the old.
         if preview:
             self._close_preview()
         suf = path.suffix.lower()
@@ -1745,7 +1780,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._open_text(path)
             elif suf in io.IMAGE_SUFFIXES:
                 self._open_image_file(path)
-            else:  # best-effort: try image, else text
+            else:
                 try:
                     self._open_image_file(path)
                 except Exception:
@@ -1776,8 +1811,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _reveal_in_tree(self, path: Path) -> None:
         """Scroll the file sidebar to the given file (matches the active tab)."""
-        # If the file is outside the current tree root, reroot to its folder.
-        # Compare via Path (Qt uses '/', pathlib uses '\\' on Windows).
         root_path = self._fs_model.filePath(self._tree.rootIndex())
         if root_path:
             try:
@@ -1794,7 +1827,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             self._tree.scrollTo(idx, QtWidgets.QAbstractItemView.PositionAtCenter)
             self._tree.setCurrentIndex(idx)
-            # QFileSystemModel populates lazily; retry once so the row exists.
             if retry == 0:
                 QtCore.QTimer.singleShot(150, lambda: do(1))
 
@@ -1820,18 +1852,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._docs[widget] = doc
         idx = self._tabs.addTab(widget, title)
         self._tabs.setTabToolTip(idx, str(doc.file_path))
-        self._tabs.setCurrentWidget(widget)  # triggers _on_tab_changed
-
-    def _default_settings(self) -> dict:
-        return {
-            "log": False,
-            "overmax": True,
-            "colormap": self._settings.value("def_cmap", "gray", type=str),
-            "scale_on": False,
-            "px_size": 1.0,
-            "unit": self._settings.value("def_unit", "µm", type=str),
-            "tool": "select",
-        }
+        self._tabs.setCurrentWidget(widget)
 
     def _open_h5(self, path: Path) -> None:
         root = io.read_structure(path)
@@ -1870,7 +1891,7 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
             except Exception:
-                pass  # show raw text if not valid JSON
+                pass
         editor = QtWidgets.QPlainTextEdit()
         editor.setReadOnly(True)
         editor.setFont(QtGui.QFont("Consolas", 10))
@@ -1918,13 +1939,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._det_combo.clear()
             return
 
-        # Structure tree for this file (or clear for plain images).
         if doc.structure is not None:
             self._populate_structure(doc.structure)
         else:
             self._struct_tree.clear()
 
-        # Scan / Det combos reflect this document.
         self._frames = doc.frames
         with QtCore.QSignalBlocker(self._scan_combo), QtCore.QSignalBlocker(
             self._det_combo
@@ -1940,7 +1959,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 if cur is not None:
                     self._det_combo.setCurrentText(cur.detector)
 
-        # Document-View: the panel reflects THIS file's own settings.
         doc.view_settings["log"] = self._log_chk.isChecked()
         doc.view_settings["overmax"] = self._overmax_chk.isChecked()
         doc.view_settings["colormap"] = self._cmap_combo.currentText()
@@ -1956,7 +1974,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if view is None or not view.has_image():
             self._status.showMessage("먼저 이미지를 여세요.", 3000)
             return
-        pix = view.grab()  # image + histogram + baked-in scale bar
+        pix = view.grab()
 
         lo, hi = view.get_levels()
         scale_txt = (
@@ -2041,8 +2059,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _tree_path(self, index: QtCore.QModelIndex) -> Path | None:
         path = Path(self._fs_model.filePath(index))
-        supported = io.H5_SUFFIXES + io.IMAGE_SUFFIXES + io.TEXT_SUFFIXES
-        if path.is_file() and path.suffix.lower() in supported:
+        if path.is_file() and path.suffix.lower() in self._SUPPORTED:
             return path
         return None
 
@@ -2109,7 +2126,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if doc is None or doc.kind != "image" or not doc.frames:
             return
         scan = self._scan_combo.currentText()
-        # Keep det list in sync with the selected scan.
         expected = [f.detector for f in doc.frames if f.scan == scan]
         if [self._det_combo.itemText(i) for i in range(self._det_combo.count())] != expected:
             with QtCore.QSignalBlocker(self._det_combo):
