@@ -1,3 +1,7 @@
+[project.scripts]
+dfxm-gui = "dfxm.gui.__main__:main"
+opticalc = "dfxm.gui.__main__:main"
+
 [project]
 name = "dfxm"
 version = "0.1.0"
@@ -5,8 +9,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "cupy-cuda13x[ctk]>=14.1.1",
     "h5py>=3.16.0",
+    "ipykernel>=7.3.0",
     "matplotlib>=3.11.0",
     "numpy>=2.5.1",
+    "opencv-python>=5.0.0.93",
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.11.1",
+    "scikit-image>=0.26.0",
     "tifffile>=2026.6.1",
 ]
