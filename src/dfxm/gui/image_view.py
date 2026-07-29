@@ -145,6 +145,7 @@ class ImageView(QtWidgets.QWidget):
         self._display: np.ndarray | None = None
 
         self._log_enabled = False
+        self._preproc: list = []
         self._overmax_enabled = True
         self._overmax_color = (255, 0, 0)
 
@@ -442,10 +443,12 @@ class ImageView(QtWidgets.QWidget):
     def _recompute_display(self, autolevel: bool) -> None:
         if self._raw is None:
             return
+        # Pipeline: [user preproc chain] -> [log scale (opt)]
+        source = self._apply_preproc(self._raw)
         if self._log_enabled:
-            self._display = adaptive_log(self._raw)
+            self._display = adaptive_log(source)
         else:
-            self._display = self._raw
+            self._display = source
 
         self._image_item.setImage(self._display, autoLevels=False)
 
@@ -467,6 +470,47 @@ class ImageView(QtWidgets.QWidget):
             return
         self._log_enabled = enabled
         self._recompute_display(autolevel=True)
+
+    def log_enabled(self) -> bool:
+        return self._log_enabled
+
+    # --- preprocessing chain ----------------------------------------------
+    def set_preproc(self, ops: list) -> None:
+        """Set the resolved preprocessing chain.
+
+        Each op is a dict: {"type": "dark_subtract"|"flat_divide"|"normalize",
+        "data": ndarray|None}. Applied in list order, BEFORE the log stage.
+        Ops whose reference array shape mismatches the frame are ignored.
+        """
+        self._preproc = list(ops or [])
+        self._recompute_display(autolevel=True)
+
+    def _apply_preproc(self, raw: np.ndarray) -> np.ndarray:
+        src = raw
+        for op in self._preproc:
+            t = op.get("type")
+            data = op.get("data")
+            if t in ("dark_subtract", "flat_divide"):
+                if data is None or np.shape(data) != np.shape(raw):
+                    continue  # unusable reference -> skip silently
+            if t == "dark_subtract":
+                src = src - data
+            elif t == "flat_divide":
+                denom = np.where(np.abs(data) < 1e-12, np.nan, data)
+                src = src / denom
+            elif t == "normalize":
+                finite = src[np.isfinite(src)]
+                mx = float(finite.max()) if finite.size else 0.0
+                if mx > 0:
+                    src = src / mx
+        return src
+
+    def has_preproc(self) -> bool:
+        """True if any background-type op (subtract/divide) is active."""
+        return any(
+            op.get("type") in ("dark_subtract", "flat_divide", "normalize")
+            for op in self._preproc
+        )
 
     def set_colormap(self, name: str) -> None:
         try:

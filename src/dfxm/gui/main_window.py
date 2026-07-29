@@ -13,7 +13,9 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .. import ellipse_fit as ef
 from .. import io
+from ..session import MasterTableModel
 from .image_view import COLORMAPS, ImageView
 from .roi import EllipseFitROI, LineProfileROI, RectRegionROI
 from .icons import AppIcons, logo_icon, logo_pixmap
@@ -249,29 +251,65 @@ class DropOverlay(QtWidgets.QWidget):
         super().__init__(parent)
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
-        self.setStyleSheet("background: rgba(0,0,0,0.6);")
-        self._box = QtWidgets.QLabel()
-        self._box.setAlignment(QtCore.Qt.AlignCenter)
+        self.setStyleSheet("background: rgba(0,0,0,0.65);")
+
+        # 1. 중앙 박스 (테두리 및 배경 카드 역할)
+        self._card = QtWidgets.QFrame()
+        self._card.setObjectName("DropCard")
+
+        # 2. 아이콘 표시용 QLabel
+        self._icon_label = QtWidgets.QLabel()
+        self._icon_label.setAlignment(QtCore.Qt.AlignCenter)
+
+        # 3. 텍스트 표시용 QLabel
+        self._text_label = QtWidgets.QLabel()
+        self._text_label.setAlignment(QtCore.Qt.AlignCenter)
+
+        # 카드 내부 레이아웃
+        card_lay = QtWidgets.QVBoxLayout(self._card)
+        card_lay.setContentsMargins(60, 40, 60, 40)
+        card_lay.setSpacing(16)
+        card_lay.addWidget(self._icon_label, 0, QtCore.Qt.AlignCenter)
+        card_lay.addWidget(self._text_label, 0, QtCore.Qt.AlignCenter)
+
+        # 전체 오버레이 레이아웃
         lay = QtWidgets.QVBoxLayout(self)
         lay.addStretch(1)
-        lay.addWidget(self._box, 0, QtCore.Qt.AlignCenter)
+        lay.addWidget(self._card, 0, QtCore.Qt.AlignCenter)
         lay.addStretch(1)
         self.hide()
 
     def set_ok(self, ok: bool) -> None:
-        color = "#4da3ff" if ok else "#ff5252"
-        text = (
-            "📥  여기에 파일 또는 폴더를 떨어뜨리세요\n\n"
-            "지원 형식: .h5  .tif  .png  .jpg  .json ..."
-            if ok
-            else "⚠  지원하지 않는 파일 형식입니다"
-        )
-        self._box.setText(text)
-        self._box.setStyleSheet(
-            f"border: 3px dashed {color}; border-radius: 18px; color: #fff;"
-            f"padding: 60px 80px; font-size: 13pt; font-weight: bold;"
-            f"background: rgba(255,255,255,0.03);"
-        )
+        color_hex = "#4da3ff" if ok else "#ff5252"
+
+        # 1. 아이콘 변경 (QtAwesome 픽스맵)
+        icon_key = AppIcons.DOWNLOAD if ok else AppIcons.WARNING
+        pixmap = AppIcons.get_pixmap(icon_key, size=56, color=color_hex)
+        self._icon_label.setPixmap(pixmap)
+
+        # 2. 텍스트 변경
+        if ok:
+            text = (
+                "<span style='font-size: 15pt; font-weight: bold; color: #ffffff;'>"
+                "여기에 파일 또는 폴더를 떨어뜨리세요</span><br><br>"
+                "<span style='font-size: 10pt; color: #b0b0b8;'>"
+                "지원 형식: .h5  .tif  .png  .jpg  .json ...</span>"
+            )
+        else:
+            text = (
+                "<span style='font-size: 14pt; font-weight: bold; color: #ff5252;'>"
+                "지원하지 않는 파일 형식입니다</span>"
+            )
+        self._text_label.setText(text)
+
+        # 3. 카드 테두리 스타일 적용 (상황에 맞게 색상 동적 변경)
+        self._card.setStyleSheet(f"""
+            QFrame#DropCard {{
+                border: 2px dashed {color_hex};
+                border-radius: 16px;
+                background: rgba(30, 30, 35, 0.85);
+            }}
+        """)
 
     def cover(self) -> None:
         self.setGeometry(self.parent().rect())
@@ -409,6 +447,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1500, 950)
 
         self._current_file: Path | None = None
+        self._suppress_reveal = False
+        self._pending_fit: dict | None = None
+        self._master = MasterTableModel(self)
         self._frames: list[io.FramePath] = []
         self._settings = QtCore.QSettings("DFXM", "ImageAnalyzer")
         self._theme = self._settings.value("theme", "Dark", type=str)
@@ -574,6 +615,98 @@ class MainWindow(QtWidgets.QMainWindow):
             self._settings.setValue("persistent_log", b)
             self._log(f"Log scale {'ON' if b else 'OFF'}")
 
+    # ------------------------------------------------- preprocessing chain
+    # The recipe lives per-document in view_settings["preproc"] and is shown /
+    # managed in the sidebar's 오브젝트 tab (each image root gets a ⚙ 전처리
+    # group). Dark/Flat sources are chosen from the sidebar (구조/파일 tab
+    # context menu), not a modal dialog.
+    _PREPROC_LABELS = {
+        "dark_subtract": "Dark 빼기 (A − D)",
+        "flat_divide": "Flat 나누기 (A / F)",
+        "normalize": "정규화 (/max)",
+    }
+
+    def _doc_preproc(self, doc) -> list | None:
+        if doc is None or doc.kind != "image":
+            return None
+        return doc.view_settings.setdefault("preproc", [])
+
+    def _cur_preproc(self) -> list | None:
+        return self._doc_preproc(self._cur())
+
+    def _preproc_add(self, doc, op_type: str, source: dict | None = None) -> None:
+        """Append an op to a document's recipe. `source` carries the reference
+        location ({"dataset_path": ...} or {"file_path": ...}) for dark/flat."""
+        chain = self._doc_preproc(doc)
+        if chain is None:
+            self._status.showMessage("이미지 문서를 먼저 여세요", 4000)
+            return
+        op = {"type": op_type}
+        if op_type in ("dark_subtract", "flat_divide"):
+            if not source:
+                self._status.showMessage(
+                    "구조/파일 탭에서 소스를 우클릭해 지정하세요", 5000
+                )
+                return
+            op.update(source)
+        chain.append(op)
+        self._log(f"전처리 추가: {self._preproc_label(op)}  [{doc.file_path.name}]")
+        self._after_preproc_change(doc)
+
+    def _preproc_remove_at(self, doc, idx: int) -> None:
+        chain = self._doc_preproc(doc)
+        if chain is None or not 0 <= idx < len(chain):
+            return
+        chain.pop(idx)
+        self._after_preproc_change(doc)
+
+    def _preproc_move_at(self, doc, idx: int, delta: int) -> None:
+        chain = self._doc_preproc(doc)
+        if chain is None or not 0 <= idx < len(chain):
+            return
+        j = idx + delta
+        if not 0 <= j < len(chain):
+            return
+        chain[idx], chain[j] = chain[j], chain[idx]
+        self._after_preproc_change(doc)
+
+    def _after_preproc_change(self, doc) -> None:
+        """Re-resolve + apply the recipe if it belongs to the active view, and
+        refresh the object tree so the pipeline display stays in sync."""
+        if doc is self._cur():
+            self._apply_preproc_to_view()
+        self._rebuild_object_tree()
+
+    def _preproc_label(self, op: dict) -> str:
+        base = self._PREPROC_LABELS.get(op["type"], op["type"])
+        src = op.get("dataset_path") or op.get("file_path")
+        return f"{base}  ⟵ {src}" if src else base
+
+    def _resolve_chain(self, doc, chain: list) -> list:
+        """Load reference arrays for a recipe into ready-to-apply ndarrays."""
+        resolved = []
+        for op in chain or []:
+            data = None
+            src = op.get("dataset_path") or op.get("file_path")
+            if src is not None:
+                try:
+                    if "dataset_path" in op:
+                        arr = io.load_dataset(doc.file_path, op["dataset_path"])
+                    else:
+                        arr = io.load_image_file(op["file_path"])
+                    data = np.asarray(arr, dtype=np.float32)
+                except Exception as exc:
+                    self._log(f"전처리 소스 로드 실패: {src} — {exc}")
+            resolved.append({"type": op["type"], "data": data})
+        return resolved
+
+    def _apply_preproc_to_view(self) -> None:
+        v = self._cur_view()
+        doc = self._cur()
+        if v is None or doc is None:
+            return
+        v.set_preproc(self._resolve_chain(doc, self._cur_preproc() or []))
+
     def _do_overmax(self, b) -> None:
         if (v := self._cur_view()) and (s := self._cur_settings()) is not None:
             v.set_overmax(b)
@@ -623,9 +756,39 @@ class MainWindow(QtWidgets.QMainWindow):
         if geom is None:
             return
         pts = v.picked_points()
+        # Capture the result so [표에 추가] can push it into the Master table.
+        self._pending_fit = self._fit_row(doc, v, geom, pts)
         v.clear_fit()  # replace the static preview with a managed ROI object
         name = self._next_roi_name(doc, "ellipse", "Ellipse")
         self.add_roi(EllipseFitROI(geom, points=pts, name=name))
+        self._status.showMessage("피팅 완료 — [표에 추가]로 결과 저장", 4000)
+
+    def _shot_id(self, doc: DocumentSession) -> str:
+        stem = doc.file_path.stem
+        return f"{stem}:{doc.frame}" if doc.frame is not None else stem
+
+    def _fit_row(self, doc, v, geom: dict, pts: np.ndarray) -> dict:
+        pts_arr = np.asarray(pts, dtype=float)
+        # fit_error = RMS Sampson residual, recomputed from the stored points.
+        try:
+            coeffs = ef.fit_ellipse(pts_arr[:, 0], pts_arr[:, 1])
+            err = float(np.sqrt(np.mean(
+                ef.sampson_residuals(coeffs, pts_arr[:, 0], pts_arr[:, 1]) ** 2)))
+        except Exception:
+            err = float("nan")
+        return {
+            "shot_id": self._shot_id(doc),
+            "status": "OK",
+            "center_x": geom["center_x"],
+            "center_y": geom["center_y"],
+            "major_axis": geom["major_diameter"],
+            "minor_axis": geom["minor_diameter"],
+            "angle_deg": geom["angle_major_from_x_deg"],
+            "fit_error": err,
+            "points_json": json.dumps(pts_arr.tolist()),
+            "bg_applied": bool(v.has_preproc()),
+            "log_scale": bool(v.log_enabled()),
+        }
 
     # ------------------------------------------------------------- ROI (B-1)
     @staticmethod
@@ -717,6 +880,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         tree.itemChanged.connect(self._on_obj_item_changed)
         tree.itemClicked.connect(self._on_obj_item_clicked)
+        tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        tree.customContextMenuRequested.connect(self._on_obj_context_menu)
         dele = QtGui.QShortcut(QtGui.QKeySequence.Delete, tree)
         dele.setContext(QtCore.Qt.WidgetShortcut)
         dele.activated.connect(self._on_obj_delete)
@@ -752,6 +917,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     _ROLE_ROI = QtCore.Qt.UserRole
     _ROLE_DOC = QtCore.Qt.UserRole + 1
+    _ROLE_PREPROC_IDX = QtCore.Qt.UserRole + 2  # op index; group node = -1
 
     def _add_obj_item(self, roi, root, widget) -> None:
         item = QtWidgets.QTreeWidgetItem([roi.name, "", ""])
@@ -789,10 +955,28 @@ class MainWindow(QtWidgets.QMainWindow):
             if widget is active:
                 root.setFont(0, bold)
             self._obj_tree.addTopLevelItem(root)
+            self._add_preproc_group(root, doc, widget)
             for roi in doc.roi_objects.values():
                 self._add_obj_item(roi, root, widget)
             root.setExpanded(True)
         self._obj_updating = False
+
+    def _add_preproc_group(self, root, doc, widget) -> None:
+        chain = doc.view_settings.get("preproc", [])
+        grp = QtWidgets.QTreeWidgetItem([f"⚙ 전처리  ({len(chain)})", "", ""])
+        grp.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+        grp.setData(0, self._ROLE_DOC, widget)
+        grp.setData(0, self._ROLE_PREPROC_IDX, -1)
+        grp.setForeground(0, QtGui.QBrush(QtGui.QColor("#9aa0a6")))
+        root.addChild(grp)
+        for i, op in enumerate(chain):
+            it = QtWidgets.QTreeWidgetItem([f"{i + 1}. {self._preproc_label(op)}", "", ""])
+            it.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+            it.setData(0, self._ROLE_DOC, widget)
+            it.setData(0, self._ROLE_PREPROC_IDX, i)
+            it.setForeground(0, QtGui.QBrush(QtGui.QColor("#c7cbd1")))
+            grp.addChild(it)
+        grp.setExpanded(True)
 
     def _on_roi_added(self, roi) -> None:
         self._rebuild_object_tree()
@@ -858,9 +1042,39 @@ class MainWindow(QtWidgets.QMainWindow):
         item = self._obj_tree.currentItem()
         if item is None:
             return
+        idx = item.data(0, self._ROLE_PREPROC_IDX)
+        if idx is not None and idx >= 0:
+            doc = self._docs.get(item.data(0, self._ROLE_DOC))
+            if doc is not None:
+                self._preproc_remove_at(doc, idx)
+            return
         rid = item.data(0, self._ROLE_ROI)
         if rid:
             self.remove_roi(rid)
+
+    def _on_obj_context_menu(self, pos: QtCore.QPoint) -> None:
+        item = self._obj_tree.itemAt(pos)
+        if item is None:
+            return
+        idx = item.data(0, self._ROLE_PREPROC_IDX)
+        doc = self._docs.get(item.data(0, self._ROLE_DOC))
+        if doc is None:
+            return
+        menu = QtWidgets.QMenu(self)
+        if idx == -1:  # ⚙ 전처리 group node
+            menu.addAction("정규화 (/max) 추가",
+                           lambda: self._preproc_add(doc, "normalize"))
+            menu.addSeparator()
+            hint = menu.addAction("Dark/Flat: 구조·파일 탭에서 우클릭")
+            hint.setEnabled(False)
+        elif idx is not None and idx >= 0:  # an op step
+            menu.addAction("↑ 위로", lambda: self._preproc_move_at(doc, idx, -1))
+            menu.addAction("↓ 아래로", lambda: self._preproc_move_at(doc, idx, 1))
+            menu.addSeparator()
+            menu.addAction("삭제", lambda: self._preproc_remove_at(doc, idx))
+        else:
+            return
+        menu.exec(self._obj_tree.viewport().mapToGlobal(pos))
 
     def _delete_selected_roi(self) -> None:
         """Delete key: remove the ROI selected on the active canvas."""
@@ -1244,6 +1458,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._struct_tree.setHeaderLabels(["이름", "종류", "shape", "dtype"])
         self._struct_tree.setAlternatingRowColors(True)
         self._struct_tree.itemDoubleClicked.connect(self._on_struct_activated)
+        self._struct_tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self._struct_tree.customContextMenuRequested.connect(
+            self._on_struct_context_menu
+        )
         tabs.addTab(self._struct_tree, "구조")
 
         tabs.addTab(self._build_object_tree(), "오브젝트")
@@ -1268,6 +1486,18 @@ class MainWindow(QtWidgets.QMainWindow):
             icn_file = AppIcons.get(AppIcons.FILE, self._icon_color)
             act_open = menu.addAction(icn_file, "파일 열기")
             act_open.triggered.connect(lambda: self._open_document(path, preview=False))
+
+            # 전처리 소스 지정 (이미지 파일만) — 현재 문서 체인에 추가
+            if path.suffix.lower() in io.IMAGE_SUFFIXES:
+                src = {"file_path": str(path)}
+                a_dark = menu.addAction("→ Dark 소스로 빼기 추가")
+                a_dark.triggered.connect(
+                    lambda: self._preproc_add(self._cur(), "dark_subtract", src)
+                )
+                a_flat = menu.addAction("→ Flat 소스로 나누기 추가")
+                a_flat.triggered.connect(
+                    lambda: self._preproc_add(self._cur(), "flat_divide", src)
+                )
             menu.addSeparator()
 
         # 2. 파일 탐색기에서 열기
@@ -1523,6 +1753,77 @@ class MainWindow(QtWidgets.QMainWindow):
         fl.addWidget(self._results, 1)
         return w
 
+    # ----------------------------------------------------- results table
+    def _build_results_tab(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        v.setContentsMargins(4, 4, 4, 4)
+        v.setSpacing(4)
+
+        bar = QtWidgets.QHBoxLayout()
+        self._btn_add_row = QtWidgets.QPushButton("표에 추가")
+        self._btn_add_row.setIcon(AppIcons.get(AppIcons.CHECK, self._icon_color))
+        self._btn_add_row.clicked.connect(self._add_fit_to_table)
+        self._btn_del_row = QtWidgets.QPushButton("행 삭제")
+        self._btn_del_row.clicked.connect(self._del_selected_row)
+        self._btn_csv = QtWidgets.QPushButton("CSV 내보내기")
+        self._btn_csv.setIcon(AppIcons.get(AppIcons.DOWNLOAD, self._icon_color))
+        self._btn_csv.clicked.connect(self._export_csv)
+        bar.addWidget(self._btn_add_row)
+        bar.addWidget(self._btn_del_row)
+        bar.addStretch(1)
+        bar.addWidget(self._btn_csv)
+        v.addLayout(bar)
+
+        self._results_table = QtWidgets.QTableView()
+        self._results_table.setModel(self._master)
+        self._results_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self._results_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection
+        )
+        self._results_table.horizontalHeader().setStretchLastSection(True)
+        self._results_table.setAlternatingRowColors(True)
+        v.addWidget(self._results_table, 1)
+        return w
+
+    def _add_fit_to_table(self) -> None:
+        if self._pending_fit is None:
+            self._status.showMessage("추가할 피팅 결과 없음 — 먼저 타원 피팅 실행", 4000)
+            return
+        r = self._master.add_row(self._pending_fit)
+        self._analysis_dock.show()
+        self._results_table.resizeColumnsToContents()
+        self._results_table.selectRow(r)
+        self._log(f"표에 추가: {self._pending_fit['shot_id']} (행 {r + 1})")
+        self._pending_fit = None
+
+    def _del_selected_row(self) -> None:
+        sel = self._results_table.selectionModel()
+        if sel is None or not sel.selectedRows():
+            return
+        self._master.remove_row(sel.selectedRows()[0].row())
+
+    def _export_csv(self) -> None:
+        if self._master.rowCount() == 0:
+            self._status.showMessage("내보낼 데이터 없음", 4000)
+            return
+        start = self._dialog_start_dir()
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "CSV 내보내기", str(Path(start) / "dfxm_results.csv"),
+            "CSV 파일 (*.csv)",
+        )
+        if not path:
+            return
+        try:
+            self._master.to_csv(path)
+        except Exception as exc:
+            self._status.showMessage(f"CSV 저장 실패: {exc}", 6000)
+            return
+        self._status.showMessage(f"CSV 저장: {path}", 5000)
+        self._log(f"CSV 내보내기: {path}")
+
     # ----------------------------------------------------- analysis dock
     def _build_analysis_dock(self) -> None:
         self._analysis_dock = QtWidgets.QDockWidget("분석 / 로그", self)
@@ -1546,6 +1847,8 @@ class MainWindow(QtWidgets.QMainWindow):
             pen=pg.mkPen("#22d3ee", width=1.6)
         )
         tabs.addTab(self._profile_plot, "라인 프로파일")
+
+        tabs.addTab(self._build_results_tab(), "결과 표")
 
         # Per-file operation log
         self._log_view = QtWidgets.QPlainTextEdit()
@@ -1719,9 +2022,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._hist_chk.setEnabled(True)
                 self._hist_chk.setChecked(v.histogram_visible())
 
-    def _apply_settings_to(self, view: ImageView, s: dict) -> None:
+    def _apply_settings_to(self, view: ImageView, s: dict, doc=None) -> None:
         """Apply a session's stored view_settings onto its view."""
         view.set_log(s.get("log", False))
+        if doc is not None:
+            view.set_preproc(self._resolve_chain(doc, s.get("preproc", [])))
         view.set_overmax(s.get("overmax", True))
         if "overmax_color" in s:
             view.set_overmax_color(QtGui.QColor(s["overmax_color"]))
@@ -1811,6 +2116,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _reveal_in_tree(self, path: Path) -> None:
         """Scroll the file sidebar to the given file (matches the active tab)."""
+        if self._suppress_reveal:
+            return
         root_path = self._fs_model.filePath(self._tree.rootIndex())
         if root_path:
             try:
@@ -1964,7 +2271,7 @@ class MainWindow(QtWidgets.QMainWindow):
         doc.view_settings["colormap"] = self._cmap_combo.currentText()
 
         self._sync_panel_from(doc.view_settings)
-        self._apply_settings_to(doc.view, doc.view_settings)
+        self._apply_settings_to(doc.view, doc.view_settings, doc)
         self._sync_hist_chk()
         self._rebuild_object_tree()
 
@@ -2037,8 +2344,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self._log("타원 피팅 완료")
 
     # -------------------------------------------------------- file logic
-    def _open_folder(self) -> None:
+    def _dialog_start_dir(self) -> str:
         start = self._settings.value("last_dir", "", type=str)
+        if not start or not Path(start).is_dir():
+            start = str(Path.home())
+        return start
+
+    def _open_folder(self) -> None:
+        start = self._dialog_start_dir()
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "폴더 선택", start)
         if path:
             self._fs_model.setRootPath(path)
@@ -2046,7 +2359,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._settings.setValue("last_dir", path)
 
     def _open_file(self) -> None:
-        start = self._settings.value("last_dir", "", type=str)
+        start = self._dialog_start_dir()
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "파일 선택",
@@ -2065,11 +2378,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_tree_preview(self, index: QtCore.QModelIndex) -> None:
         if p := self._tree_path(index):
-            self._open_document(p, preview=True)
+            # user clicked in the tree: item already visible, skip re-scroll
+            self._suppress_reveal = True
+            try:
+                self._open_document(p, preview=True)
+            finally:
+                self._suppress_reveal = False
 
     def _on_tree_open(self, index: QtCore.QModelIndex) -> None:
         if p := self._tree_path(index):
-            self._open_document(p, preview=False)
+            self._suppress_reveal = True
+            try:
+                self._open_document(p, preview=False)
+            finally:
+                self._suppress_reveal = False
 
     def _populate_structure(self, root: io.H5Node) -> None:
         self._struct_tree.clear()
@@ -2097,6 +2419,26 @@ class MainWindow(QtWidgets.QMainWindow):
         for c in range(4):
             self._struct_tree.resizeColumnToContents(c)
 
+    def _on_struct_context_menu(self, pos: QtCore.QPoint) -> None:
+        item = self._struct_tree.itemAt(pos)
+        if item is None:
+            return
+        node: io.H5Node | None = item.data(0, QtCore.Qt.UserRole)
+        doc = self._cur()
+        if node is None or node.is_group or doc is None or doc.kind != "image":
+            return
+        src = {"dataset_path": node.path}
+        menu = QtWidgets.QMenu(self)
+        menu.addAction(
+            "→ Dark 소스로 빼기 추가",
+            lambda: self._preproc_add(doc, "dark_subtract", src),
+        )
+        menu.addAction(
+            "→ Flat 소스로 나누기 추가",
+            lambda: self._preproc_add(doc, "flat_divide", src),
+        )
+        menu.exec(self._struct_tree.viewport().mapToGlobal(pos))
+
     def _on_struct_activated(self, item: QtWidgets.QTreeWidgetItem, _col: int) -> None:
         node: io.H5Node | None = item.data(0, QtCore.Qt.UserRole)
         doc = self._cur()
@@ -2110,7 +2452,7 @@ class MainWindow(QtWidgets.QMainWindow):
         doc.view.set_image(img)
         doc.frame = None
         doc.info = self._img_info(doc.file_path, node.path, img)
-        self._apply_settings_to(doc.view, doc.view_settings)
+        self._apply_settings_to(doc.view, doc.view_settings, doc)
         self._pin_tab(self._tabs.currentWidget())
         doc.add_log(f"데이터셋 열기: {node.path}")
         self._refresh_log()
@@ -2142,7 +2484,7 @@ class MainWindow(QtWidgets.QMainWindow):
         doc.view.set_image(img)
         doc.frame = frame
         doc.info = self._img_info(doc.file_path, str(frame), img)
-        self._apply_settings_to(doc.view, doc.view_settings)
+        self._apply_settings_to(doc.view, doc.view_settings, doc)
         self._pin_tab(self._tabs.currentWidget())
         doc.add_log(f"프레임 전환: {frame}")
         self._refresh_log()

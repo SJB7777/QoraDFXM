@@ -2,18 +2,35 @@ from pathlib import Path
 from PySide6 import QtGui
 import qtawesome as qta
 
-ASSETS_DIR = Path("assets")
+# repo root anchored to this file, not CWD
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+ASSETS_DIR = _REPO_ROOT / "assets"
 ICON_DIR = ASSETS_DIR / "icons"
 LOGO_PATH = ASSETS_DIR / "logo.png"
 
+# qtawesome fallback when logo.png missing
+APP_ICON_QTA = "fa5s.x-ray"
+APP_ICON_COLOR = "#4da3ff"
+
 def logo_icon() -> QtGui.QIcon:
-    return QtGui.QIcon(str(LOGO_PATH))
+    if LOGO_PATH.exists():
+        icon = QtGui.QIcon(str(LOGO_PATH))
+        if not icon.isNull():
+            return icon
+    try:
+        return qta.icon(APP_ICON_QTA, color=APP_ICON_COLOR)
+    except Exception:
+        return QtGui.QIcon()
 
 def logo_pixmap(size: int = 120) -> QtGui.QPixmap:
-    pm = QtGui.QPixmap(str(LOGO_PATH))
-    if pm.isNull():
-        return pm
-    return pm.scaled(size, size, QtGui.Qt.KeepAspectRatio, QtGui.Qt.SmoothTransformation)
+    if LOGO_PATH.exists():
+        pm = QtGui.QPixmap(str(LOGO_PATH))
+        if not pm.isNull():
+            return pm.scaled(size, size, QtGui.Qt.KeepAspectRatio, QtGui.Qt.SmoothTransformation)
+    try:
+        return qta.icon(APP_ICON_QTA, color=APP_ICON_COLOR).pixmap(size, size)
+    except Exception:
+        return QtGui.QPixmap()
 
 
 class AppIcons:
@@ -31,7 +48,9 @@ class AppIcons:
     CHECK = "fa5s.check"
     FILE = "ph.file-bold"
     COPY = "ph.copy-bold"
-    EXTERNAL = "ph.arrow-square-out-bold" #
+    EXTERNAL = "ph.arrow-square-out-bold"
+    DOWNLOAD = "ph.download-simple-bold"
+    WARNING = "ph.warning-circle-bold"
 
     @staticmethod
     def get(name_or_qta: str, color: str = "#d4d4d8") -> QtGui.QIcon:
