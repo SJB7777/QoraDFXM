@@ -1,5 +1,5 @@
-import numpy as np
+"""Backward-compat shim. Real implementation in dfxm.core.transform."""
 
-def adaptive_log(img) -> np.ndarray:
-    c = 1.0 / np.log1p(np.max(img))
-    return c * np.log1p(img)
+from __future__ import annotations
+
+from .core.transform import adaptive_log  # noqa: F401

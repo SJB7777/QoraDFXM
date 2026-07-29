@@ -13,13 +13,15 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .. import ellipse_fit as ef
 from .. import io
-from ..session import MasterTableModel
-from .image_view import COLORMAPS, ImageView
-from .roi import EllipseFitROI, LineProfileROI, RectRegionROI
+from ..core import DFXMDataset
+from ..core.history import History
+from ..core.results import MASTER_COLUMNS, ResultsFrame
 from .icons import AppIcons, logo_icon, logo_pixmap
-
+from .image_view import COLORMAPS, ImageView
+from .models import COLUMN_LABELS, MasterTableModel
+from .results_window import DropTableView, ResultsWindow
+from .roi import EllipseFitROI, LineProfileROI, RectRegionROI
 
 APP_NAME = "DFXM OptiCalc"
 APP_VERSION = "0.1.0"
@@ -32,6 +34,7 @@ class DocumentSession:
     file_path: Path
     kind: str  # 'image' | 'text'
     view: ImageView | None = None
+    ds: object = None  # core.DFXMDataset — raw + preproc history + fit
     frames: list = field(default_factory=list)
     frame: object = None
     structure: object = None
@@ -180,20 +183,48 @@ QDockWidget { border: 1px solid %BORDER%; }
 
 _PALETTES = {
     "Dark": {
-        "BASE": "#1b1b1d", "WIDGET": "#232326", "PANEL": "#202024", "SURF": "#26262a",
-        "RIBBON": "#252526", "INPUT": "#191919", "BORDER": "#303036",
-        "BORDER2": "#3a3a42", "BTN": "#2e2e33", "HOVER": "#2c2c32", "HOVER2": "#38383e",
-        "TEXT": "#e4e4e7", "TEXT2": "#d4d4d8", "DIM": "#9a9aa2", "ACCBG": "#234844",
-        "SELTEXT": "#ffffff", "STATUSBG": "#1a1a1d", "TABSEL": "#2b2b31",
-        "SHADOW": "#141416", "ACCENT": "#00e5ff",
+        "BASE": "#1b1b1d",
+        "WIDGET": "#232326",
+        "PANEL": "#202024",
+        "SURF": "#26262a",
+        "RIBBON": "#252526",
+        "INPUT": "#191919",
+        "BORDER": "#303036",
+        "BORDER2": "#3a3a42",
+        "BTN": "#2e2e33",
+        "HOVER": "#2c2c32",
+        "HOVER2": "#38383e",
+        "TEXT": "#e4e4e7",
+        "TEXT2": "#d4d4d8",
+        "DIM": "#9a9aa2",
+        "ACCBG": "#234844",
+        "SELTEXT": "#ffffff",
+        "STATUSBG": "#1a1a1d",
+        "TABSEL": "#2b2b31",
+        "SHADOW": "#141416",
+        "ACCENT": "#00e5ff",
     },
     "Light": {
-        "BASE": "#e5e5ea", "WIDGET": "#f1f1f4", "PANEL": "#e2e2e8", "SURF": "#ececef",
-        "RIBBON": "#f7f7f9", "INPUT": "#ffffff", "BORDER": "#c6c6cf",
-        "BORDER2": "#b2b2bd", "BTN": "#e9e9ef", "HOVER": "#dcdce3", "HOVER2": "#d2d2da",
-        "TEXT": "#1c1c22", "TEXT2": "#2a2a32", "DIM": "#6a6a74", "ACCBG": "#c9edf3",
-        "SELTEXT": "#0b1113", "STATUSBG": "#dcdce2", "TABSEL": "#f7f7f9",
-        "SHADOW": "#b6b6be", "ACCENT": "#0891b2",
+        "BASE": "#e5e5ea",
+        "WIDGET": "#f1f1f4",
+        "PANEL": "#e2e2e8",
+        "SURF": "#ececef",
+        "RIBBON": "#f7f7f9",
+        "INPUT": "#ffffff",
+        "BORDER": "#c6c6cf",
+        "BORDER2": "#b2b2bd",
+        "BTN": "#e9e9ef",
+        "HOVER": "#dcdce3",
+        "HOVER2": "#d2d2da",
+        "TEXT": "#1c1c22",
+        "TEXT2": "#2a2a32",
+        "DIM": "#6a6a74",
+        "ACCBG": "#c9edf3",
+        "SELTEXT": "#0b1113",
+        "STATUSBG": "#dcdce2",
+        "TABSEL": "#f7f7f9",
+        "SHADOW": "#b6b6be",
+        "ACCENT": "#0891b2",
     },
 }
 
@@ -203,12 +234,12 @@ def build_style(theme: str) -> str:
     s = _STYLE_TMPL
     for k, v in toks.items():
         s = s.replace("%" + k + "%", v)
-    
+
     # qtawesome 체크마크 아이콘을 임시 PNG로 저장하여 QSS에 주입
     check_pix = AppIcons.get_pixmap(AppIcons.CHECK, size=12, color="#ffffff")
     tmp_check_path = Path(tempfile.gettempdir()) / "dfxm_qta_check.png"
     check_pix.save(str(tmp_check_path))
-    
+
     s = s.replace("%CHECKMARK_ICON%", str(tmp_check_path).replace("\\", "/"))
     return s
 
@@ -225,7 +256,9 @@ class CollapsibleSection(QtWidgets.QWidget):
         self._header.setChecked(expanded)
         self._header.setProperty("class", "SectionHeader")
         self._header.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
-        self._header.setArrowType(QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow)
+        self._header.setArrowType(
+            QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow
+        )
         self._header.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
         )
@@ -357,8 +390,10 @@ class SettingsDialog(QtWidgets.QDialog):
         logo = QtWidgets.QLabel()
         logo.setPixmap(logo_pixmap(72))
         brand.addWidget(logo)
-        title = QtWidgets.QLabel(f"<b style='font-size:15pt'>{APP_NAME}</b>"
-                                 f"<br><span style='color:#888'>v{APP_VERSION}</span>")
+        title = QtWidgets.QLabel(
+            f"<b style='font-size:15pt'>{APP_NAME}</b>"
+            f"<br><span style='color:#888'>v{APP_VERSION}</span>"
+        )
         brand.addWidget(title, 1)
         outer.addLayout(brand)
         outer.addSpacing(8)
@@ -449,7 +484,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._current_file: Path | None = None
         self._suppress_reveal = False
         self._pending_fit: dict | None = None
-        self._master = MasterTableModel(self)
+        self._shot_map: dict[str, tuple] = {}  # shot_id -> (file_path, FramePath)
+        self._master = MasterTableModel(parent=self)
         self._frames: list[io.FramePath] = []
         self._settings = QtCore.QSettings("DFXM", "ImageAnalyzer")
         self._theme = self._settings.value("theme", "Dark", type=str)
@@ -490,12 +526,24 @@ class MainWindow(QtWidgets.QMainWindow):
     def _default_settings(self) -> dict:
         """Return initial view settings, inheriting current active control values."""
         return {
-            "log": getattr(self, "_log_chk", None) and self._log_chk.isChecked() or False,
-            "overmax": getattr(self, "_overmax_chk", None) and self._overmax_chk.isChecked() or True,
-            "colormap": getattr(self, "_cmap_combo", None) and self._cmap_combo.currentText() or self._settings.value("def_cmap", "gray", type=str),
-            "scale_on": getattr(self, "_scale_chk", None) and self._scale_chk.isChecked() or False,
-            "px_size": getattr(self, "_px_size_spin", None) and self._px_size_spin.value() or 1.0,
-            "unit": getattr(self, "_unit_combo", None) and self._unit_combo.currentText() or self._settings.value("def_unit", "µm", type=str),
+            "log": getattr(self, "_log_chk", None)
+            and self._log_chk.isChecked()
+            or False,
+            "overmax": getattr(self, "_overmax_chk", None)
+            and self._overmax_chk.isChecked()
+            or True,
+            "colormap": getattr(self, "_cmap_combo", None)
+            and self._cmap_combo.currentText()
+            or self._settings.value("def_cmap", "gray", type=str),
+            "scale_on": getattr(self, "_scale_chk", None)
+            and self._scale_chk.isChecked()
+            or False,
+            "px_size": getattr(self, "_px_size_spin", None)
+            and self._px_size_spin.value()
+            or 1.0,
+            "unit": getattr(self, "_unit_combo", None)
+            and self._unit_combo.currentText()
+            or self._settings.value("def_unit", "µm", type=str),
             "tool": getattr(self, "_current_tool", "select"),
         }
 
@@ -511,7 +559,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for p in paths:
             if p.is_dir():
                 files += sorted(
-                    f for f in p.rglob("*")
+                    f
+                    for f in p.rglob("*")
                     if f.is_file() and f.suffix.lower() in self._SUPPORTED
                 )
             elif p.is_file() and p.suffix.lower() in self._SUPPORTED:
@@ -584,13 +633,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._theme = theme
         self._icon_color = "#d4d4d8" if theme == "Dark" else "#33333a"
         self.setStyleSheet(build_style(theme))
-        
+
         # 등록된 Action 및 Button들 테마 색상 재적용
         for act, name in self._icon_actions.items():
             act.setIcon(AppIcons.get(name, self._icon_color))
         for btn, name in self._icon_buttons.items():
             btn.setIcon(AppIcons.get(name, self._icon_color))
-            
+
         dark = theme == "Dark"
         for doc in self._docs.values():
             if doc.kind == "image" and doc.view is not None:
@@ -609,103 +658,74 @@ class MainWindow(QtWidgets.QMainWindow):
             v.reset_zoom()
 
     def _do_log(self, b) -> None:
-        if (v := self._cur_view()) and (s := self._cur_settings()) is not None:
-            v.set_log(b)
-            s["log"] = b
-            self._settings.setValue("persistent_log", b)
-            self._log(f"Log scale {'ON' if b else 'OFF'}")
+        doc = self._cur()
+        if doc is None or doc.ds is None:
+            return
+        # Log is just another op in the Core pipeline (appended last / removed).
+        if b and not doc.ds.log_scale:
+            doc.ds = doc.ds.apply_log()
+        elif not b and doc.ds.log_scale:
+            ops = [op for op in doc.ds.history if op.kind != "log"]
+            doc.ds = doc.ds.set_history(History(tuple(ops)))
+        self._settings.setValue("persistent_log", b)
+        self._log(f"Log scale {'ON' if b else 'OFF'}")
+        self._after_preproc_change(doc)
 
     # ------------------------------------------------- preprocessing chain
-    # The recipe lives per-document in view_settings["preproc"] and is shown /
-    # managed in the sidebar's 오브젝트 tab (each image root gets a ⚙ 전처리
-    # group). Dark/Flat sources are chosen from the sidebar (구조/파일 tab
-    # context menu), not a modal dialog.
-    _PREPROC_LABELS = {
-        "dark_subtract": "Dark 빼기 (A − D)",
-        "flat_divide": "Flat 나누기 (A / F)",
-        "normalize": "정규화 (/max)",
-    }
+    # The recipe is Core state: doc.ds.history (immutable). It is shown / managed
+    # in the sidebar's 오브젝트 tab (each image root gets a ⚙ 전처리 group).
+    # Dark/Flat sources are chosen from the sidebar (구조/파일 tab context menu).
+    # The GUI performs NO pixel math — Core computes doc.ds.image.
 
-    def _doc_preproc(self, doc) -> list | None:
-        if doc is None or doc.kind != "image":
-            return None
-        return doc.view_settings.setdefault("preproc", [])
-
-    def _cur_preproc(self) -> list | None:
-        return self._doc_preproc(self._cur())
+    def _cur_preproc(self):
+        doc = self._cur()
+        return list(doc.ds.history) if (doc and doc.ds) else []
 
     def _preproc_add(self, doc, op_type: str, source: dict | None = None) -> None:
-        """Append an op to a document's recipe. `source` carries the reference
-        location ({"dataset_path": ...} or {"file_path": ...}) for dark/flat."""
-        chain = self._doc_preproc(doc)
-        if chain is None:
+        """Append an op to a document's Core recipe. `source` carries the
+        reference location ({"dataset_path": ...}/{"file_path": ...})."""
+        if doc is None or doc.ds is None:
             self._status.showMessage("이미지 문서를 먼저 여세요", 4000)
             return
-        op = {"type": op_type}
-        if op_type in ("dark_subtract", "flat_divide"):
-            if not source:
-                self._status.showMessage(
-                    "구조/파일 탭에서 소스를 우클릭해 지정하세요", 5000
-                )
-                return
-            op.update(source)
-        chain.append(op)
-        self._log(f"전처리 추가: {self._preproc_label(op)}  [{doc.file_path.name}]")
+        if op_type in ("sub_bg", "divide") and not source:
+            self._status.showMessage(
+                "구조/파일 탭에서 소스를 우클릭해 지정하세요", 5000
+            )
+            return
+        doc.ds = doc.ds.add_op(op_type, **(source or {}))
+        self._log(f"전처리 추가: {doc.ds.history[-1].label()}  [{doc.file_path.name}]")
         self._after_preproc_change(doc)
 
     def _preproc_remove_at(self, doc, idx: int) -> None:
-        chain = self._doc_preproc(doc)
-        if chain is None or not 0 <= idx < len(chain):
+        if doc is None or doc.ds is None:
             return
-        chain.pop(idx)
+        ops = list(doc.ds.history)
+        if not 0 <= idx < len(ops):
+            return
+        del ops[idx]
+        doc.ds = doc.ds.set_history(History(tuple(ops)))
         self._after_preproc_change(doc)
 
     def _preproc_move_at(self, doc, idx: int, delta: int) -> None:
-        chain = self._doc_preproc(doc)
-        if chain is None or not 0 <= idx < len(chain):
+        if doc is None or doc.ds is None:
             return
+        ops = list(doc.ds.history)
         j = idx + delta
-        if not 0 <= j < len(chain):
+        if not (0 <= idx < len(ops) and 0 <= j < len(ops)):
             return
-        chain[idx], chain[j] = chain[j], chain[idx]
+        ops[idx], ops[j] = ops[j], ops[idx]
+        doc.ds = doc.ds.set_history(History(tuple(ops)))
         self._after_preproc_change(doc)
 
     def _after_preproc_change(self, doc) -> None:
-        """Re-resolve + apply the recipe if it belongs to the active view, and
-        refresh the object tree so the pipeline display stays in sync."""
-        if doc is self._cur():
-            self._apply_preproc_to_view()
+        """Push Core's recomputed image to the active view + refresh object tree
+        and the Log checkbox (which is now driven by the recipe)."""
+        if doc is self._cur() and doc.view is not None:
+            doc.view.update_processed(doc.ds.image)
+            with QtCore.QSignalBlocker(self._log_chk):
+                self._log_chk.setChecked(doc.ds.log_scale)
+            self._inspector_fill()
         self._rebuild_object_tree()
-
-    def _preproc_label(self, op: dict) -> str:
-        base = self._PREPROC_LABELS.get(op["type"], op["type"])
-        src = op.get("dataset_path") or op.get("file_path")
-        return f"{base}  ⟵ {src}" if src else base
-
-    def _resolve_chain(self, doc, chain: list) -> list:
-        """Load reference arrays for a recipe into ready-to-apply ndarrays."""
-        resolved = []
-        for op in chain or []:
-            data = None
-            src = op.get("dataset_path") or op.get("file_path")
-            if src is not None:
-                try:
-                    if "dataset_path" in op:
-                        arr = io.load_dataset(doc.file_path, op["dataset_path"])
-                    else:
-                        arr = io.load_image_file(op["file_path"])
-                    data = np.asarray(arr, dtype=np.float32)
-                except Exception as exc:
-                    self._log(f"전처리 소스 로드 실패: {src} — {exc}")
-            resolved.append({"type": op["type"], "data": data})
-        return resolved
-
-    def _apply_preproc_to_view(self) -> None:
-        v = self._cur_view()
-        doc = self._cur()
-        if v is None or doc is None:
-            return
-        v.set_preproc(self._resolve_chain(doc, self._cur_preproc() or []))
 
     def _do_overmax(self, b) -> None:
         if (v := self._cur_view()) and (s := self._cur_settings()) is not None:
@@ -756,39 +776,29 @@ class MainWindow(QtWidgets.QMainWindow):
         if geom is None:
             return
         pts = v.picked_points()
-        # Capture the result so [표에 추가] can push it into the Master table.
-        self._pending_fit = self._fit_row(doc, v, geom, pts)
+        # Delegate the fit to Core: record it on the dataset.
+        if doc.ds is not None:
+            doc.ds = doc.ds.fit_ellipse(pts)
+            self._register_shot(doc)
+            rec = doc.ds.to_record()
+            # If this shot ALREADY has a row (from populate/drop), update it in
+            # place (Phase 2). Otherwise DON'T auto-add — the user picks fields
+            # in the 샷 정보 inspector and commits one row deliberately.
+            prev = self._master.index_of(rec["shot_id"])
+            if prev is not None:
+                if str(self._master.status_at(prev)) == "EXCLUDE":
+                    rec["status"] = "EXCLUDE"  # manual exclude survives re-fitting
+                r, _ = self._master.upsert_row(rec)
+                self._results_table.selectRow(r)
+                self._status.showMessage(f"피팅 완료 → 행 {r + 1} 갱신", 4000)
+            else:
+                self._status.showMessage(
+                    "피팅 완료 → 샷 정보 탭에서 [표에 한 줄 추가]", 5000
+                )
+            self._inspector_fill()
         v.clear_fit()  # replace the static preview with a managed ROI object
         name = self._next_roi_name(doc, "ellipse", "Ellipse")
         self.add_roi(EllipseFitROI(geom, points=pts, name=name))
-        self._status.showMessage("피팅 완료 — [표에 추가]로 결과 저장", 4000)
-
-    def _shot_id(self, doc: DocumentSession) -> str:
-        stem = doc.file_path.stem
-        return f"{stem}:{doc.frame}" if doc.frame is not None else stem
-
-    def _fit_row(self, doc, v, geom: dict, pts: np.ndarray) -> dict:
-        pts_arr = np.asarray(pts, dtype=float)
-        # fit_error = RMS Sampson residual, recomputed from the stored points.
-        try:
-            coeffs = ef.fit_ellipse(pts_arr[:, 0], pts_arr[:, 1])
-            err = float(np.sqrt(np.mean(
-                ef.sampson_residuals(coeffs, pts_arr[:, 0], pts_arr[:, 1]) ** 2)))
-        except Exception:
-            err = float("nan")
-        return {
-            "shot_id": self._shot_id(doc),
-            "status": "OK",
-            "center_x": geom["center_x"],
-            "center_y": geom["center_y"],
-            "major_axis": geom["major_diameter"],
-            "minor_axis": geom["minor_diameter"],
-            "angle_deg": geom["angle_major_from_x_deg"],
-            "fit_error": err,
-            "points_json": json.dumps(pts_arr.tolist()),
-            "bg_applied": bool(v.has_preproc()),
-            "log_scale": bool(v.log_enabled()),
-        }
 
     # ------------------------------------------------------------- ROI (B-1)
     @staticmethod
@@ -924,7 +934,8 @@ class MainWindow(QtWidgets.QMainWindow):
         item.setIcon(0, self._roi_icon(roi.roi_type))
         item.setData(0, self._ROLE_ROI, roi.roi_id)
         item.setFlags(
-            QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
+            QtCore.Qt.ItemIsEnabled
+            | QtCore.Qt.ItemIsSelectable
             | QtCore.Qt.ItemIsEditable
         )
         self._set_eye_lock(item, roi.visible, roi.locked)
@@ -962,7 +973,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._obj_updating = False
 
     def _add_preproc_group(self, root, doc, widget) -> None:
-        chain = doc.view_settings.get("preproc", [])
+        chain = list(doc.ds.history) if doc.ds is not None else []
         grp = QtWidgets.QTreeWidgetItem([f"⚙ 전처리  ({len(chain)})", "", ""])
         grp.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
         grp.setData(0, self._ROLE_DOC, widget)
@@ -970,7 +981,7 @@ class MainWindow(QtWidgets.QMainWindow):
         grp.setForeground(0, QtGui.QBrush(QtGui.QColor("#9aa0a6")))
         root.addChild(grp)
         for i, op in enumerate(chain):
-            it = QtWidgets.QTreeWidgetItem([f"{i + 1}. {self._preproc_label(op)}", "", ""])
+            it = QtWidgets.QTreeWidgetItem([f"{i + 1}. {op.label()}", "", ""])
             it.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
             it.setData(0, self._ROLE_DOC, widget)
             it.setData(0, self._ROLE_PREPROC_IDX, i)
@@ -1052,6 +1063,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if rid:
             self.remove_roi(rid)
 
+    def _add_gamma(self, doc) -> None:
+        g, ok = QtWidgets.QInputDialog.getDouble(
+            self, "감마 값", "γ (예: 0.5 = 밝게, 2.0 = 어둡게):", 0.5, 0.01, 10.0, 2
+        )
+        if ok:
+            self._preproc_add(doc, "gamma", {"gamma": float(g)})
+
     def _on_obj_context_menu(self, pos: QtCore.QPoint) -> None:
         item = self._obj_tree.itemAt(pos)
         if item is None:
@@ -1062,8 +1080,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         menu = QtWidgets.QMenu(self)
         if idx == -1:  # ⚙ 전처리 group node
-            menu.addAction("정규화 (/max) 추가",
-                           lambda: self._preproc_add(doc, "normalize"))
+            menu.addAction("Log (adaptive) 추가", lambda: self._preproc_add(doc, "log"))
+            menu.addAction(
+                "Log (pure) 추가", lambda: self._preproc_add(doc, "pure_log")
+            )
+            menu.addAction("제곱근 (√) 추가", lambda: self._preproc_add(doc, "sqrt"))
+            menu.addAction("감마 (γ) 추가…", lambda: self._add_gamma(doc))
+            menu.addAction(
+                "정규화 (/max) 추가", lambda: self._preproc_add(doc, "normalize")
+            )
             menu.addSeparator()
             hint = menu.addAction("Dark/Flat: 구조·파일 탭에서 우클릭")
             hint.setEnabled(False)
@@ -1173,10 +1198,16 @@ class MainWindow(QtWidgets.QMainWindow):
         # Actions (reused across ribbon tabs).
         self._act_folder = self._act("📁\n폴더", self._open_folder, "폴더 열기")
         self._act_file = self._act("📂\n파일", self._open_file, "파일 열기")
-        self._act_shot = self._act("📷\n스크린샷", self._screenshot, "PNG 저장 +클립보드")
+        self._act_shot = self._act(
+            "📷\n스크린샷", self._screenshot, "PNG 저장 +클립보드"
+        )
         self._act_reset = self._act("⤢\n기본 줌", self._do_reset, "전체 보기 복귀")
-        self._act_clear = self._act("🧹\n초기화", self._on_clear_fit, "측정/피팅 초기화")
-        self._act_autolevel = self._act("📊\nAuto", self._do_autoscale, "Auto 레벨 0.5–99.5%")
+        self._act_clear = self._act(
+            "🧹\n초기화", self._on_clear_fit, "측정/피팅 초기화"
+        )
+        self._act_autolevel = self._act(
+            "📊\nAuto", self._do_autoscale, "Auto 레벨 0.5–99.5%"
+        )
         self._act_fit = self._act("화면 맞춤", self._do_reset, "Fit to Window")
 
         # Tool actions (exclusive).
@@ -1210,8 +1241,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_action_icon(self._act_fit, AppIcons.DEFAULT_ZOOM)
 
         for tname, (lbl, icn) in {
-            "pan": ("이동", AppIcons.HAND), "zoom": ("확대", AppIcons.ZOOM_IN),
-            "distance": ("거리", AppIcons.RULER), "line": ("라인", AppIcons.LINE),
+            "pan": ("이동", AppIcons.HAND),
+            "zoom": ("확대", AppIcons.ZOOM_IN),
+            "distance": ("거리", AppIcons.RULER),
+            "line": ("라인", AppIcons.LINE),
             "ellipse": ("타원 피팅", AppIcons.OVAL),
         }.items():
             self._tool_actions[tname].setText(lbl)
@@ -1261,43 +1294,115 @@ class MainWindow(QtWidgets.QMainWindow):
         ribbon.setDocumentMode(True)
 
         # Home
-        g_file = self._ribbon_group("파일 관리", self._row(
-            self._rbtn(self._act_folder), self._rbtn(self._act_file),
-            self._rbtn(self._act_shot)))
+        g_file = self._ribbon_group(
+            "파일 관리",
+            self._row(
+                self._rbtn(self._act_folder),
+                self._rbtn(self._act_file),
+                self._rbtn(self._act_shot),
+            ),
+        )
         g_frame = self._ribbon_group("프레임", self._frame_row())
-        g_edit = self._ribbon_group("편집", self._row(
-            self._rbtn(self._act_reset), self._rbtn(self._act_clear)))
+        g_edit = self._ribbon_group(
+            "편집", self._row(self._rbtn(self._act_reset), self._rbtn(self._act_clear))
+        )
         ribbon.addTab(self._ribbon_page([g_file, g_frame, g_edit]), "홈")
 
         # Analyze
-        g_meas = self._ribbon_group("측정 / 피팅 도구", self._row(
-            self._rbtn(self._tool_actions["distance"]),
-            self._rbtn(self._tool_actions["line"]),
-            self._rbtn(self._tool_actions["ellipse"]),
-            self._rbtn(self._tool_actions["rect"])))
+        g_meas = self._ribbon_group(
+            "측정 / 피팅 도구",
+            self._row(
+                self._rbtn(self._tool_actions["distance"]),
+                self._rbtn(self._tool_actions["line"]),
+                self._rbtn(self._tool_actions["ellipse"]),
+                self._rbtn(self._tool_actions["rect"]),
+            ),
+        )
         ribbon.addTab(self._ribbon_page([g_meas]), "분석")
 
+        # Data / Table — table is a first-class feature, not just a fit sink.
+        self._act_show_table = self._act(
+            "표 보기", self._show_results_table, "결과 표 창 열기")
+        self._act_new_row = self._act(
+            "빈 줄 추가", self._new_table_row, "빈 줄 추가 후 직접 입력")
+        self._act_populate = self._act(
+            "파일 목록 불러오기", self._populate_shots,
+            "현재 파일의 프레임마다 한 줄씩 생성")
+        self._act_exclude = self._act(
+            "제외 표시", self._toggle_exclude, "선택한 줄 제외/포함 전환")
+        self._act_del_row = self._act(
+            "줄 삭제", self._del_selected_row, "선택한 줄 삭제")
+        self._act_clear_table = self._act(
+            "전체 비우기", self._clear_table, "모든 줄 삭제")
+        self._act_import_csv = self._act(
+            "CSV 불러오기", self._import_csv, "CSV 파일 → 표")
+        self._act_export_csv = self._act(
+            "CSV 저장", self._export_csv, "표 → CSV 파일")
+        self._set_action_icon(self._act_show_table, AppIcons.FILE)
+        self._set_action_icon(self._act_new_row, AppIcons.CHECK)
+        self._set_action_icon(self._act_import_csv, AppIcons.FOLDER)
+        self._set_action_icon(self._act_export_csv, AppIcons.DOWNLOAD)
+        self._set_action_icon(self._act_exclude, AppIcons.WARNING)
+        g_tbl = self._ribbon_group(
+            "결과 표",
+            self._row(
+                self._rbtn(self._act_show_table),
+                self._rbtn(self._act_new_row),
+                self._rbtn(self._act_populate),
+            ),
+        )
+        g_clean = self._ribbon_group(
+            "정리",
+            self._row(
+                self._rbtn(self._act_exclude),
+                self._rbtn(self._act_del_row),
+                self._rbtn(self._act_clear_table),
+            ),
+        )
+        g_io = self._ribbon_group(
+            "가져오기 / 내보내기",
+            self._row(
+                self._rbtn(self._act_import_csv),
+                self._rbtn(self._act_export_csv),
+            ),
+        )
+        ribbon.addTab(self._ribbon_page([g_tbl, g_clean, g_io]), "데이터")
+
         # View
-        g_panels = self._ribbon_group("패널 표시", self._row(
-            self._toggle_btn(tog_file), self._toggle_btn(tog_ctrl),
-            self._toggle_btn(tog_ana)))
+        g_panels = self._ribbon_group(
+            "패널 표시",
+            self._row(
+                self._toggle_btn(tog_file),
+                self._toggle_btn(tog_ctrl),
+                self._toggle_btn(tog_ana),
+            ),
+        )
         cmap_holder = QtWidgets.QVBoxLayout()
         cmap_holder.setContentsMargins(0, 0, 0, 0)
         cmap_holder.addWidget(self._ribbon_cmap)
-        cmap_holder.addWidget(QtWidgets.QLabel("Colormap", alignment=QtCore.Qt.AlignCenter))
-        disp_row = self._row(self._rbtn(self._act_autolevel),
-                             self._toggle_btn(self._grid_chk_act))
+        cmap_holder.addWidget(
+            QtWidgets.QLabel("Colormap", alignment=QtCore.Qt.AlignCenter)
+        )
+        disp_row = self._row(
+            self._rbtn(self._act_autolevel), self._toggle_btn(self._grid_chk_act)
+        )
         disp_row.addLayout(cmap_holder)
         g_disp = self._ribbon_group("디스플레이", disp_row)
-        g_viewport = self._ribbon_group("뷰 포트", self._row(
-            self._rbtn(self._act_fit), self._rbtn(self._act_zoom100)))
+        g_viewport = self._ribbon_group(
+            "뷰 포트",
+            self._row(self._rbtn(self._act_fit), self._rbtn(self._act_zoom100)),
+        )
         ribbon.addTab(self._ribbon_page([g_panels, g_disp, g_viewport]), "보기 (View)")
 
         # Tools
-        g_tools = self._ribbon_group("탐색 / 선택", self._row(
-            self._rbtn(self._tool_actions["select"]),
-            self._rbtn(self._tool_actions["pan"]),
-            self._rbtn(self._tool_actions["zoom"])))
+        g_tools = self._ribbon_group(
+            "탐색 / 선택",
+            self._row(
+                self._rbtn(self._tool_actions["select"]),
+                self._rbtn(self._tool_actions["pan"]),
+                self._rbtn(self._tool_actions["zoom"]),
+            ),
+        )
         ribbon.addTab(self._ribbon_page([g_tools]), "도구")
 
         # Quick-access (top-left)
@@ -1310,16 +1415,30 @@ class MainWindow(QtWidgets.QMainWindow):
         brand.setToolTip(APP_NAME)
         qh.addWidget(brand)
         qh.addWidget(self._qsep())
-        
+
         qh.addWidget(self._quick_btn(AppIcons.FOLDER, self._open_file, "파일 열기"))
         qh.addWidget(self._quick_btn(AppIcons.CAMERA, self._screenshot, "스크린샷"))
         qh.addWidget(self._qsep())
-        qh.addWidget(self._quick_btn(AppIcons.PAN, lambda: self._set_tool("pan"), "이동 도구"))
-        qh.addWidget(self._quick_btn(
-            AppIcons.ZOOM_OUT, lambda: self._cur_view() and self._cur_view().zoom_out(), "축소"))
-        qh.addWidget(self._quick_btn(
-            AppIcons.ZOOM_IN, lambda: self._cur_view() and self._cur_view().zoom_in(), "확대"))
-        qh.addWidget(self._quick_btn(AppIcons.DEFAULT_ZOOM, self._do_reset, "화면에 맞춤"))
+        qh.addWidget(
+            self._quick_btn(AppIcons.PAN, lambda: self._set_tool("pan"), "이동 도구")
+        )
+        qh.addWidget(
+            self._quick_btn(
+                AppIcons.ZOOM_OUT,
+                lambda: self._cur_view() and self._cur_view().zoom_out(),
+                "축소",
+            )
+        )
+        qh.addWidget(
+            self._quick_btn(
+                AppIcons.ZOOM_IN,
+                lambda: self._cur_view() and self._cur_view().zoom_in(),
+                "확대",
+            )
+        )
+        qh.addWidget(
+            self._quick_btn(AppIcons.DEFAULT_ZOOM, self._do_reset, "화면에 맞춤")
+        )
 
         glob = QtWidgets.QWidget()
         gh = QtWidgets.QHBoxLayout(glob)
@@ -1328,9 +1447,12 @@ class MainWindow(QtWidgets.QMainWindow):
         gh.addWidget(QtWidgets.QLabel("🌐"))
         self._lang_combo = QtWidgets.QComboBox()
         self._lang_combo.addItems(["KO", "EN"])
-        self._lang_combo.setCurrentText(self._settings.value("lang_short", "KO", type=str))
+        self._lang_combo.setCurrentText(
+            self._settings.value("lang_short", "KO", type=str)
+        )
         self._lang_combo.currentTextChanged.connect(
-            lambda s: self._settings.setValue("lang_short", s))
+            lambda s: self._settings.setValue("lang_short", s)
+        )
         gh.addWidget(self._lang_combo)
         act_set = self._mini(self._act("⚙", self._open_settings, "환경설정"))
         gh.addWidget(act_set)
@@ -1432,8 +1554,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._fs_model = QtWidgets.QFileSystemModel()
         self._fs_model.setNameFilters(
-            ["*.h5", "*.hdf5", "*.tif", "*.tiff", "*.png", "*.jpg",
-             "*.jpeg", "*.bmp", "*.json", "*.txt"]
+            [
+                "*.h5",
+                "*.hdf5",
+                "*.tif",
+                "*.tiff",
+                "*.png",
+                "*.jpg",
+                "*.jpeg",
+                "*.bmp",
+                "*.json",
+                "*.txt",
+            ]
         )
         self._fs_model.setNameFilterDisables(False)
         self._fs_model.setRootPath("")
@@ -1444,6 +1576,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for col in (1, 2, 3):  # hide size / type / date
             self._tree.hideColumn(col)
         self._tree.setHeaderHidden(True)
+        self._tree.setDragEnabled(True)  # drag files onto the results table
+        self._tree.setDragDropMode(QtWidgets.QAbstractItemView.DragOnly)
         self._tree.clicked.connect(self._on_tree_preview)
         self._tree.doubleClicked.connect(self._on_tree_open)
 
@@ -1465,6 +1599,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(self._struct_tree, "구조")
 
         tabs.addTab(self._build_object_tree(), "오브젝트")
+        tabs.addTab(self._build_shot_inspector(), "샷 정보")
 
         dock.setWidget(tabs)
         dock.setMinimumWidth(280)
@@ -1492,11 +1627,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 src = {"file_path": str(path)}
                 a_dark = menu.addAction("→ Dark 소스로 빼기 추가")
                 a_dark.triggered.connect(
-                    lambda: self._preproc_add(self._cur(), "dark_subtract", src)
+                    lambda: self._preproc_add(self._cur(), "sub_bg", src)
                 )
                 a_flat = menu.addAction("→ Flat 소스로 나누기 추가")
                 a_flat.triggered.connect(
-                    lambda: self._preproc_add(self._cur(), "flat_divide", src)
+                    lambda: self._preproc_add(self._cur(), "divide", src)
                 )
             menu.addSeparator()
 
@@ -1519,8 +1654,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if abs_path.is_file():
             # Windows의 경우 파일 선택 상태로 탐색기 열기 지원
             import platform
+
             if platform.system() == "Windows":
                 import subprocess
+
                 subprocess.run(["explorer", "/select,", str(abs_path)])
                 return
             target_url = QtCore.QUrl.fromLocalFile(str(abs_path.parent))
@@ -1687,7 +1824,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_distance_page(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
-        lay.addWidget(QtWidgets.QLabel("점을 클릭해 구간 거리 측정 (링 간격).\n우클릭=가까운 점 삭제."))
+        lay.addWidget(
+            QtWidgets.QLabel(
+                "점을 클릭해 구간 거리 측정 (링 간격).\n우클릭=가까운 점 삭제."
+            )
+        )
 
         self._dist_table = QtWidgets.QTableWidget(0, 3)
         self._dist_table.setHorizontalHeaderLabels(["구간", "거리", "누적"])
@@ -1706,7 +1847,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_line_page(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
-        lay.addWidget(QtWidgets.QLabel("라인을 드래그하면 강도 프로파일이\n하단 플롯에 표시됩니다."))
+        lay.addWidget(
+            QtWidgets.QLabel(
+                "라인을 드래그하면 강도 프로파일이\n하단 플롯에 표시됩니다."
+            )
+        )
 
         self._line_stats = QtWidgets.QFormLayout()
         self._line_len = QtWidgets.QLabel("–")
@@ -1731,7 +1876,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._fit_shape.addItems(["타원 (Ellipse)"])
         fl.addWidget(self._fit_shape)
 
-        hint = QtWidgets.QLabel("좌클릭=점 추가, 우클릭=가까운 점 삭제\n5점 이상에서 Fit.")
+        hint = QtWidgets.QLabel(
+            "좌클릭=점 추가, 우클릭=가까운 점 삭제\n5점 이상에서 Fit."
+        )
         hint.setStyleSheet("color:#888;")
         fl.addWidget(hint)
 
@@ -1754,50 +1901,273 @@ class MainWindow(QtWidgets.QMainWindow):
         return w
 
     # ----------------------------------------------------- results table
-    def _build_results_tab(self) -> QtWidgets.QWidget:
-        w = QtWidgets.QWidget()
-        v = QtWidgets.QVBoxLayout(w)
-        v.setContentsMargins(4, 4, 4, 4)
-        v.setSpacing(4)
-
-        bar = QtWidgets.QHBoxLayout()
-        self._btn_add_row = QtWidgets.QPushButton("표에 추가")
-        self._btn_add_row.setIcon(AppIcons.get(AppIcons.CHECK, self._icon_color))
-        self._btn_add_row.clicked.connect(self._add_fit_to_table)
-        self._btn_del_row = QtWidgets.QPushButton("행 삭제")
-        self._btn_del_row.clicked.connect(self._del_selected_row)
-        self._btn_csv = QtWidgets.QPushButton("CSV 내보내기")
-        self._btn_csv.setIcon(AppIcons.get(AppIcons.DOWNLOAD, self._icon_color))
-        self._btn_csv.clicked.connect(self._export_csv)
-        bar.addWidget(self._btn_add_row)
-        bar.addWidget(self._btn_del_row)
-        bar.addStretch(1)
-        bar.addWidget(self._btn_csv)
-        v.addLayout(bar)
-
-        self._results_table = QtWidgets.QTableView()
+    def _build_results_table_widget(self) -> None:
+        """The QTableView itself (hosted later by the standalone ResultsWindow)."""
+        self._results_table = DropTableView()
         self._results_table.setModel(self._master)
-        self._results_table.setSelectionBehavior(
-            QtWidgets.QAbstractItemView.SelectRows
-        )
+        self._results_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._results_table.setSelectionMode(
             QtWidgets.QAbstractItemView.SingleSelection
         )
         self._results_table.horizontalHeader().setStretchLastSection(True)
         self._results_table.setAlternatingRowColors(True)
-        v.addWidget(self._results_table, 1)
+        self._results_table.setSortingEnabled(False)
+        # Phase 2: single click a row -> switch to that shot (double-click edits).
+        self._results_table.clicked.connect(self._on_result_row_clicked)
+        # Drag files from the sidebar / OS onto the table -> auto rows.
+        self._results_table.filesDropped.connect(self._add_dropped_files)
+        self._results_window = None
+
+    # ------------------------------------------------- Phase 2: shot ↔ row
+    def _shot_id_for_frame(self, path: Path, frame) -> str:
+        return f"{Path(path).stem}:{frame}"
+
+    def _register_shot(self, doc) -> None:
+        """Remember how to reload a shot_id (file + frame) for row-click nav."""
+        if doc is None or doc.ds is None or doc.frame is None:
+            return
+        self._shot_map[doc.ds.meta["shot_id"]] = (doc.file_path, doc.frame)
+
+    def _populate_shots(self) -> None:
+        """One pending row per detector frame in the current h5."""
+        doc = self._cur()
+        if doc is None or not doc.frames:
+            self._status.showMessage("프레임이 있는 HDF5를 먼저 여세요", 4000)
+            return
+        added = 0
+        for f in doc.frames:
+            sid = self._shot_id_for_frame(doc.file_path, f)
+            self._shot_map[sid] = (doc.file_path, f)
+            if self._master.index_of(sid) is None:
+                self._master.add_row({"shot_id": sid, "status": "대기"})
+                added += 1
+        self._show_results_table()
+        self._results_table.resizeColumnsToContents()
+        self._log(f"샷 목록 채움: {added}개 추가 (총 {self._master.rowCount()})")
+
+    def _on_result_row_clicked(self, index: QtCore.QModelIndex) -> None:
+        if not index.isValid():
+            return
+        sid = self._master.shot_id_at(index.row())
+        if sid:
+            self._goto_shot(str(sid))
+
+    def _goto_shot(self, shot_id: str) -> None:
+        if (entry := self._shot_map.get(shot_id)) is None:
+            self._status.showMessage(f"샷 매핑 없음: {shot_id}", 4000)
+            return
+        path, frame = entry
+        self._open_document(path)  # opens or switches to the tab
+        doc = self._cur()
+        if doc is None or frame is None:
+            return
+        with (
+            QtCore.QSignalBlocker(self._scan_combo),
+            QtCore.QSignalBlocker(self._det_combo),
+        ):
+            self._scan_combo.setCurrentText(frame.scan)
+            self._populate_dets(frame.scan)
+            self._det_combo.setCurrentText(frame.detector)
+        self._on_frame_selected()
+
+    def _toggle_exclude(self) -> None:
+        sel = self._results_table.selectionModel()
+        if sel is None or not sel.selectedRows():
+            self._status.showMessage("행을 선택하세요", 3000)
+            return
+        r = sel.selectedRows()[0].row()
+        cur = str(self._master.status_at(r) or "")
+        new = "OK" if cur == "EXCLUDE" else "EXCLUDE"
+        self._master.set_status(r, new)
+        self._log(f"상태 변경: 행 {r + 1} → {new}")
+
+    # ------------------------------------------- shot inspector (sidebar)
+    _INSP_HINT_COLS = {"center_x", "center_y", "major_axis", "minor_axis",
+                       "angle_deg", "fit_error", "points_json"}
+
+    def _build_shot_inspector(self) -> QtWidgets.QWidget:
+        """Editable key/value view of the CURRENT shot → commit as one table row."""
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(6)
+        v.addWidget(QtWidgets.QLabel("현재 샷 정보 — 체크한 항목만 표에 담김"))
+
+        self._insp = QtWidgets.QTableWidget(len(MASTER_COLUMNS), 2)
+        self._insp.setHorizontalHeaderLabels(["항목", "값"])
+        self._insp.verticalHeader().setVisible(False)
+        self._insp.horizontalHeader().setStretchLastSection(True)
+        self._insp.setColumnWidth(0, 96)
+        self._insp.setEditTriggers(
+            QtWidgets.QAbstractItemView.DoubleClicked
+            | QtWidgets.QAbstractItemView.SelectedClicked
+        )
+        for i, key in enumerate(MASTER_COLUMNS):
+            name = QtWidgets.QTableWidgetItem(COLUMN_LABELS.get(key, key))
+            name.setFlags(
+                QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsUserCheckable
+            )
+            name.setCheckState(QtCore.Qt.Checked)
+            name.setData(QtCore.Qt.UserRole, key)
+            self._insp.setItem(i, 0, name)
+            self._insp.setItem(i, 1, QtWidgets.QTableWidgetItem(""))
+        v.addWidget(self._insp, 1)
+
+        row = QtWidgets.QHBoxLayout()
+        b_fill = QtWidgets.QPushButton("샷에서 채우기")
+        b_fill.clicked.connect(self._inspector_fill)
+        b_add = QtWidgets.QPushButton("표에 한 줄 추가")
+        b_add.setIcon(AppIcons.get(AppIcons.CHECK, self._icon_color))
+        b_add.clicked.connect(self._inspector_commit)
+        row.addWidget(b_fill)
+        row.addWidget(b_add)
+        v.addLayout(row)
         return w
 
-    def _add_fit_to_table(self) -> None:
-        if self._pending_fit is None:
-            self._status.showMessage("추가할 피팅 결과 없음 — 먼저 타원 피팅 실행", 4000)
+    def _inspector_fill(self) -> None:
+        """Pull the current shot's derivable values into the inspector."""
+        if not hasattr(self, "_insp"):
             return
-        r = self._master.add_row(self._pending_fit)
-        self._analysis_dock.show()
-        self._results_table.resizeColumnsToContents()
+        doc = self._cur()
+        ds = doc.ds if doc else None
+        for i, key in enumerate(MASTER_COLUMNS):
+            name_it = self._insp.item(i, 0)
+            val_it = self._insp.item(i, 1)
+            text, present = "", False
+            if ds is not None:
+                text, present = self._shot_field(ds, key)
+            val_it.setText(text)
+            # keep identity/flags always ticked; tick derived fields only if real
+            if key in self._INSP_HINT_COLS:
+                name_it.setCheckState(
+                    QtCore.Qt.Checked if present else QtCore.Qt.Unchecked
+                )
+
+    def _shot_field(self, ds, key: str) -> tuple[str, bool]:
+        fit = ds.fit
+        match key:
+            case "shot_id":
+                return str(ds.meta.get("shot_id", "")), True
+            case "status":
+                sid = ds.meta.get("shot_id", "")
+                r = self._master.index_of(sid)
+                cur = str(self._master.status_at(r)) if r is not None else ""
+                return (cur or "OK" if fit else "대기"), True
+            case "bg_applied":
+                return ("Y" if ds.bg_applied else "N"), True
+            case "log_scale":
+                return ("Y" if ds.log_scale else "N"), True
+            case "points_json":
+                if fit:
+                    return json.dumps(fit.points), True
+                return "", False
+            case _ if fit is not None:
+                return f"{getattr(fit, key):.4g}", True
+            case _:
+                return "", False
+
+    def _inspector_commit(self) -> None:
+        """Build one row from the checked inspector fields and upsert it."""
+        row: dict = {}
+        for i, key in enumerate(MASTER_COLUMNS):
+            if self._insp.item(i, 0).checkState() != QtCore.Qt.Checked:
+                continue
+            text = self._insp.item(i, 1).text().strip()
+            if key in ("bg_applied", "log_scale"):
+                row[key] = text.lower() in ("y", "true", "1", "yes")
+            elif key in self._INSP_HINT_COLS - {"points_json"}:
+                try:
+                    row[key] = float(text) if text else None
+                except ValueError:
+                    self._status.showMessage(f"'{COLUMN_LABELS[key]}' 숫자 아님", 4000)
+                    return
+            else:
+                row[key] = text
+        if not row.get("shot_id"):
+            self._status.showMessage("샷 이름(shot_id)은 필수입니다", 4000)
+            return
+        r, created = self._master.upsert_row(row)
+        self._show_results_table()
         self._results_table.selectRow(r)
-        self._log(f"표에 추가: {self._pending_fit['shot_id']} (행 {r + 1})")
-        self._pending_fit = None
+        self._log(f"샷 정보 → 표 {'추가' if created else '갱신'}: 행 {r + 1}")
+
+    # ------------------------------------------- data table (ribbon-driven)
+    def _show_results_table(self) -> None:
+        """Open the standalone, resizable results-table window (lazy)."""
+        if self._results_window is None:
+            actions = [
+                self._act_populate, self._act_new_row, None,
+                self._act_exclude, self._act_del_row, self._act_clear_table, None,
+                self._act_import_csv, self._act_export_csv,
+            ]
+            self._results_window = ResultsWindow(
+                self._results_table, actions, self._settings, self
+            )
+        self._results_window.show_raise()
+
+    def _add_dropped_files(self, paths: list) -> None:
+        """Files dragged onto the table → basic-info rows (filename/frames)."""
+        added = 0
+        for p in paths:
+            p = Path(p)
+            if p.is_dir() or p.suffix.lower() not in self._SUPPORTED:
+                continue
+            if p.suffix.lower() in io.H5_SUFFIXES:
+                # one row per detector frame in the h5
+                try:
+                    frames = io.list_frames(p)
+                except Exception:
+                    frames = []
+                if frames:
+                    for f in frames:
+                        sid = self._shot_id_for_frame(p, f)
+                        self._shot_map[sid] = (p, f)
+                        if self._master.index_of(sid) is None:
+                            self._master.add_row({"shot_id": sid, "status": "대기"})
+                            added += 1
+                    continue
+            # image file (or frame-less h5): one row keyed by filename
+            sid = p.stem
+            self._shot_map[sid] = (p, None)
+            if self._master.index_of(sid) is None:
+                self._master.add_row({"shot_id": sid, "status": "대기"})
+                added += 1
+        self._results_table.resizeColumnsToContents()
+        self._log(f"드롭 → {added}개 행 추가")
+        self._status.showMessage(f"드롭한 파일에서 {added}개 행 추가", 4000)
+
+    def _new_table_row(self) -> None:
+        """Append a blank row for manual data entry (cells are editable)."""
+        self._show_results_table()
+        r = self._master.add_row({"status": "manual"})
+        self._results_table.selectRow(r)
+        self._results_table.edit(self._master.index(r, 0))
+
+    def _clear_table(self) -> None:
+        if self._master.rowCount() == 0:
+            return
+        ok = QtWidgets.QMessageBox.question(
+            self, "표 비우기", f"{self._master.rowCount()}개 행을 모두 삭제할까요?"
+        )
+        if ok == QtWidgets.QMessageBox.Yes:
+            self._master.clear()
+            self._log("결과 표 비움")
+
+    def _import_csv(self) -> None:
+        start = self._dialog_start_dir()
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "CSV 불러오기", start, "CSV 파일 (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            self._master.set_results(ResultsFrame.from_csv(path))
+        except Exception as exc:
+            self._status.showMessage(f"CSV 불러오기 실패: {exc}", 6000)
+            return
+        self._show_results_table()
+        self._results_table.resizeColumnsToContents()
+        self._log(f"CSV 불러옴: {path} ({self._master.rowCount()}행)")
 
     def _del_selected_row(self) -> None:
         sel = self._results_table.selectionModel()
@@ -1811,7 +2181,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         start = self._dialog_start_dir()
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "CSV 내보내기", str(Path(start) / "dfxm_results.csv"),
+            self,
+            "CSV 내보내기",
+            str(Path(start) / "dfxm_results.csv"),
             "CSV 파일 (*.csv)",
         )
         if not path:
@@ -1832,7 +2204,7 @@ class MainWindow(QtWidgets.QMainWindow):
             | QtWidgets.QDockWidget.DockWidgetFloatable
             | QtWidgets.QDockWidget.DockWidgetClosable
         )
-        tabs = QtWidgets.QTabWidget()
+        tabs = self._analysis_tabs = QtWidgets.QTabWidget()
 
         self._profile_plot = pg.PlotWidget()
         self._profile_plot.setBackground("#202225")
@@ -1848,7 +2220,9 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         tabs.addTab(self._profile_plot, "라인 프로파일")
 
-        tabs.addTab(self._build_results_tab(), "결과 표")
+        # 결과 표 lives in its own resizable window (see _show_results_table),
+        # not this cramped bottom dock. Build the table widget here though.
+        self._build_results_table_widget()
 
         # Per-file operation log
         self._log_view = QtWidgets.QPlainTextEdit()
@@ -1887,16 +2261,16 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_distance(self, seg, cum, unit: str) -> None:
         self._dist_table.setRowCount(len(seg))
         for i, (s, c) in enumerate(zip(seg, cum)):
-            self._dist_table.setItem(i, 0, QtWidgets.QTableWidgetItem(f"{i+1}→{i+2}"))
+            self._dist_table.setItem(
+                i, 0, QtWidgets.QTableWidgetItem(f"{i + 1}→{i + 2}")
+            )
             self._dist_table.setItem(
                 i, 1, QtWidgets.QTableWidgetItem(f"{s:.2f} {unit}")
             )
             self._dist_table.setItem(
                 i, 2, QtWidgets.QTableWidgetItem(f"{c:.2f} {unit}")
             )
-        self._dist_total.setText(
-            f"합계: {cum[-1]:.2f} {unit}" if cum else "합계: –"
-        )
+        self._dist_total.setText(f"합계: {cum[-1]:.2f} {unit}" if cum else "합계: –")
 
     def _build_statusbar(self) -> None:
         self._status = self.statusBar()
@@ -1909,7 +2283,9 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_out = QtWidgets.QToolButton()
         btn_out.setText("−")
         btn_out.setAutoRaise(True)
-        btn_out.clicked.connect(lambda: self._cur_view() and self._cur_view().zoom_out())
+        btn_out.clicked.connect(
+            lambda: self._cur_view() and self._cur_view().zoom_out()
+        )
         btn_in = QtWidgets.QToolButton()
         btn_in.setText("+")
         btn_in.setAutoRaise(True)
@@ -1965,7 +2341,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             Path(p).resolve().relative_to(Path(tempfile.gettempdir()).resolve())
             return True
-        except (ValueError, OSError):
+        except ValueError, OSError:
             return False
 
     # ------------------------------------------------------ session restore
@@ -1978,11 +2354,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._settings.remove("last_dir")
 
         last_file = self._settings.value("last_file", "", type=str)
-        if (
-            last_file
-            and Path(last_file).is_file()
-            and not self._under_temp(last_file)
-        ):
+        if last_file and Path(last_file).is_file() and not self._under_temp(last_file):
             self._open_document(Path(last_file))
         else:
             if self._under_temp(last_file):
@@ -2023,10 +2395,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._hist_chk.setChecked(v.histogram_visible())
 
     def _apply_settings_to(self, view: ImageView, s: dict, doc=None) -> None:
-        """Apply a session's stored view_settings onto its view."""
-        view.set_log(s.get("log", False))
-        if doc is not None:
-            view.set_preproc(self._resolve_chain(doc, s.get("preproc", [])))
+        """Apply a session's stored view_settings onto its view.
+
+        Preproc + log are NOT here — they live in doc.ds (Core) and are pushed
+        via update_processed when the recipe changes / a tab is shown."""
         view.set_overmax(s.get("overmax", True))
         if "overmax_color" in s:
             view.set_overmax_color(QtGui.QColor(s["overmax_color"]))
@@ -2040,13 +2412,18 @@ class MainWindow(QtWidgets.QMainWindow):
     def _sync_panel_from(self, s: dict) -> None:
         """Reflect a session's settings in the shared control panel (no signals)."""
         widgets = [
-            self._log_chk, self._overmax_chk, self._cmap_combo,
-            self._scale_chk, self._px_size_spin, self._unit_combo,
+            self._log_chk,
+            self._overmax_chk,
+            self._cmap_combo,
+            self._scale_chk,
+            self._px_size_spin,
+            self._unit_combo,
         ]
         if hasattr(self, "_ribbon_cmap"):
             widgets.append(self._ribbon_cmap)
         blockers = [QtCore.QSignalBlocker(x) for x in widgets]
-        self._log_chk.setChecked(s.get("log", False))
+        doc = self._cur()
+        self._log_chk.setChecked(bool(doc and doc.ds and doc.ds.log_scale))
         self._overmax_chk.setChecked(s.get("overmax", True))
         if "overmax_color" in s:
             self._overmax_color = QtGui.QColor(s["overmax_color"])
@@ -2155,7 +2532,9 @@ class MainWindow(QtWidgets.QMainWindow):
             else str(doc.file_path),
         )
 
-    def _add_tab(self, widget: QtWidgets.QWidget, doc: DocumentSession, title: str) -> None:
+    def _add_tab(
+        self, widget: QtWidgets.QWidget, doc: DocumentSession, title: str
+    ) -> None:
         self._docs[widget] = doc
         idx = self._tabs.addTab(widget, title)
         self._tabs.setTabToolTip(idx, str(doc.file_path))
@@ -2166,31 +2545,49 @@ class MainWindow(QtWidgets.QMainWindow):
         frames = io.list_frames(path)
         view = self._make_image_view()
         doc = DocumentSession(
-            file_path=path, kind="image", view=view, frames=frames,
-            frame=frames[0] if frames else None, structure=root, info=path.name,
+            file_path=path,
+            kind="image",
+            view=view,
+            frames=frames,
+            frame=frames[0] if frames else None,
+            structure=root,
+            info=path.name,
             view_settings=self._default_settings(),
         )
         if frames:
             img = io.load_frame(path, frames[0])
-            view.set_image(img)
+            doc.ds = self._make_dataset(path, img, str(frames[0]))
+            self._register_shot(doc)
+            view.set_image(doc.ds.image)
             doc.info = self._img_info(path, str(frames[0]), img)
             doc.add_log(f"열기: {path.name} ({frames[0]})")
         else:
-            view.show_error("DFXM 프레임 없음\n구조 탭에서 2D 데이터셋을 더블클릭하세요")
+            view.show_error(
+                "DFXM 프레임 없음\n구조 탭에서 2D 데이터셋을 더블클릭하세요"
+            )
             doc.add_log(f"열기: {path.name} (프레임 없음)")
         self._add_tab(view, doc, path.name)
 
     def _open_image_file(self, path: Path) -> None:
         img = io.load_image_file(path)
         view = self._make_image_view()
-        view.set_image(img)
         doc = DocumentSession(
-            file_path=path, kind="image", view=view,
+            file_path=path,
+            kind="image",
+            view=view,
+            ds=self._make_dataset(path, img, ""),
             info=self._img_info(path, path.suffix.lstrip("."), img),
             view_settings=self._default_settings(),
         )
+        view.set_image(doc.ds.image)
         doc.add_log(f"열기: {path.name}  {img.shape[1]}×{img.shape[0]}")
         self._add_tab(view, doc, path.name)
+
+    def _make_dataset(self, path, img, label: str):
+        """Wrap a freshly loaded frame in a Core DFXMDataset (raw, no ops yet)."""
+        stem = Path(path).stem
+        shot = f"{stem}:{label}" if label else stem
+        return DFXMDataset.from_array(img, source_path=path, meta={"shot_id": shot})
 
     def _open_text(self, path: Path) -> None:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -2226,8 +2623,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if doc is None:
             self._info_label.setText("파일을 열어보세요")
             self._struct_tree.clear()
-            with QtCore.QSignalBlocker(self._scan_combo), QtCore.QSignalBlocker(
-                self._det_combo
+            with (
+                QtCore.QSignalBlocker(self._scan_combo),
+                QtCore.QSignalBlocker(self._det_combo),
             ):
                 self._scan_combo.clear()
                 self._det_combo.clear()
@@ -2239,8 +2637,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if doc.kind != "image":
             self._struct_tree.clear()
-            with QtCore.QSignalBlocker(self._scan_combo), QtCore.QSignalBlocker(
-                self._det_combo
+            with (
+                QtCore.QSignalBlocker(self._scan_combo),
+                QtCore.QSignalBlocker(self._det_combo),
             ):
                 self._scan_combo.clear()
                 self._det_combo.clear()
@@ -2252,8 +2651,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._struct_tree.clear()
 
         self._frames = doc.frames
-        with QtCore.QSignalBlocker(self._scan_combo), QtCore.QSignalBlocker(
-            self._det_combo
+        with (
+            QtCore.QSignalBlocker(self._scan_combo),
+            QtCore.QSignalBlocker(self._det_combo),
         ):
             self._scan_combo.clear()
             self._det_combo.clear()
@@ -2274,6 +2674,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_settings_to(doc.view, doc.view_settings, doc)
         self._sync_hist_chk()
         self._rebuild_object_tree()
+        self._inspector_fill()
 
     def _screenshot(self) -> None:
         """Save image + scale bar + an info strip as PNG, and copy to clipboard."""
@@ -2431,11 +2832,11 @@ class MainWindow(QtWidgets.QMainWindow):
         menu = QtWidgets.QMenu(self)
         menu.addAction(
             "→ Dark 소스로 빼기 추가",
-            lambda: self._preproc_add(doc, "dark_subtract", src),
+            lambda: self._preproc_add(doc, "sub_bg", src),
         )
         menu.addAction(
             "→ Flat 소스로 나누기 추가",
-            lambda: self._preproc_add(doc, "flat_divide", src),
+            lambda: self._preproc_add(doc, "divide", src),
         )
         menu.exec(self._struct_tree.viewport().mapToGlobal(pos))
 
@@ -2449,11 +2850,13 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             self._status.showMessage(f"이 데이터셋은 2D로 볼 수 없음: {exc}", 5000)
             return
-        doc.view.set_image(img)
+        doc.ds = self._make_dataset(doc.file_path, img, node.path)
+        doc.view.set_image(doc.ds.image)
         doc.frame = None
         doc.info = self._img_info(doc.file_path, node.path, img)
         self._apply_settings_to(doc.view, doc.view_settings, doc)
         self._pin_tab(self._tabs.currentWidget())
+        self._rebuild_object_tree()
         doc.add_log(f"데이터셋 열기: {node.path}")
         self._refresh_log()
         self._info_label.setText(doc.info)
@@ -2469,7 +2872,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         scan = self._scan_combo.currentText()
         expected = [f.detector for f in doc.frames if f.scan == scan]
-        if [self._det_combo.itemText(i) for i in range(self._det_combo.count())] != expected:
+        if [
+            self._det_combo.itemText(i) for i in range(self._det_combo.count())
+        ] != expected:
             with QtCore.QSignalBlocker(self._det_combo):
                 self._populate_dets(scan)
         det = self._det_combo.currentText()
@@ -2481,11 +2886,14 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             self._status.showMessage(f"로드 실패: {exc}", 5000)
             return
-        doc.view.set_image(img)
+        doc.ds = self._make_dataset(doc.file_path, img, str(frame))
         doc.frame = frame
+        self._register_shot(doc)
+        doc.view.set_image(doc.ds.image)
         doc.info = self._img_info(doc.file_path, str(frame), img)
         self._apply_settings_to(doc.view, doc.view_settings, doc)
         self._pin_tab(self._tabs.currentWidget())
+        self._rebuild_object_tree()
         doc.add_log(f"프레임 전환: {frame}")
         self._refresh_log()
         self._remember()

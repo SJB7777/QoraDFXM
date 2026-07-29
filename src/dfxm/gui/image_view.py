@@ -15,14 +15,14 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .. import ellipse_fit as ef
-from ..transform import adaptive_log
+from ..core import fitting as ef
 
 # White-on-black scientific look, sensible defaults.
 pg.setConfigOptions(imageAxisOrder="row-major", antialias=True)
 
 # Colormaps offered in the toolbar. "gray" first so plain frames look normal.
 COLORMAPS = ["gray", "viridis", "inferno", "magma", "cividis", "turbo"]
+
 
 def _nice_length(x: float) -> float:
     """Round a length to the nearest 1/2/5 x 10^n, ImageJ scale-bar style."""
@@ -52,7 +52,7 @@ class DrawViewBox(pg.ViewBox):
     """ViewBox that, in ``draw_mode``, turns a left-drag into a rubber-band
     rectangle instead of a pan (used by the region tool)."""
 
-    drawStarted = QtCore.Signal(object)          # start point (view coords)
+    drawStarted = QtCore.Signal(object)  # start point (view coords)
     drawUpdated = QtCore.Signal(object, object)  # p0, current
     drawFinished = QtCore.Signal(object, object)  # p0, p1
 
@@ -144,8 +144,6 @@ class ImageView(QtWidgets.QWidget):
         self._raw: np.ndarray | None = None
         self._display: np.ndarray | None = None
 
-        self._log_enabled = False
-        self._preproc: list = []
         self._overmax_enabled = True
         self._overmax_color = (255, 0, 0)
 
@@ -158,7 +156,7 @@ class ImageView(QtWidgets.QWidget):
         # Distance-measure state.
         self._dist_points: list[tuple[float, float]] = []
         self._dist_labels: list[pg.TextItem] = []
-    
+
         self._build_ui()
 
     # ------------------------------------------------------------------ UI
@@ -178,7 +176,9 @@ class ImageView(QtWidgets.QWidget):
 
         # Rubber-band rectangle preview (region tool) + two-click line preview.
         self._rect_preview = QtWidgets.QGraphicsRectItem()
-        self._rect_preview.setPen(pg.mkPen("#4ade80", width=1.5, style=QtCore.Qt.DashLine))
+        self._rect_preview.setPen(
+            pg.mkPen("#4ade80", width=1.5, style=QtCore.Qt.DashLine)
+        )
         self._rect_preview.setZValue(40)
         self._rect_preview.setVisible(False)
         self._vb.addItem(self._rect_preview)
@@ -222,7 +222,10 @@ class ImageView(QtWidgets.QWidget):
         self._vb.addItem(self._ellipse_curve)
 
         self._center_marker = pg.ScatterPlotItem(
-            size=13, pen=pg.mkPen("#facc15", width=1.5), brush=pg.mkBrush(None), symbol="+"
+            size=13,
+            pen=pg.mkPen("#facc15", width=1.5),
+            brush=pg.mkBrush(None),
+            symbol="+",
         )
         self._center_marker.setZValue(21)
         self._vb.addItem(self._center_marker)
@@ -235,7 +238,10 @@ class ImageView(QtWidgets.QWidget):
 
         # Distance tool: connected polyline + point markers + per-segment labels.
         self._dist_scatter = pg.ScatterPlotItem(
-            size=10, pen=pg.mkPen("#ffd60a", width=2), brush=pg.mkBrush(None), symbol="o"
+            size=10,
+            pen=pg.mkPen("#ffd60a", width=2),
+            brush=pg.mkBrush(None),
+            symbol="o",
         )
         self._dist_scatter.setZValue(22)
         self._vb.addItem(self._dist_scatter)
@@ -269,7 +275,7 @@ class ImageView(QtWidgets.QWidget):
         self._vb.addItem(self._error_text)
 
         # Scale bar pinned to the lower-right corner (requirement 3).
-        self._px_size = 1.0          # real units per pixel
+        self._px_size = 1.0  # real units per pixel
         self._px_unit = "px"
         self._scale_calibrated = False
         self._scalebar = _ScaleBar(
@@ -443,12 +449,9 @@ class ImageView(QtWidgets.QWidget):
     def _recompute_display(self, autolevel: bool) -> None:
         if self._raw is None:
             return
-        # Pipeline: [user preproc chain] -> [log scale (opt)]
-        source = self._apply_preproc(self._raw)
-        if self._log_enabled:
-            self._display = adaptive_log(source)
-        else:
-            self._display = source
+        # The array handed in is ALREADY the processed image (Core computes the
+        # pipeline). This view just displays it — no analysis math here.
+        self._display = self._raw
 
         self._image_item.setImage(self._display, autoLevels=False)
 
@@ -464,53 +467,14 @@ class ImageView(QtWidgets.QWidget):
         self._active_hist.setImageItem(self._image_item)
         self._refresh_overlay()
 
-    # ---------------------------------------------------------------- views
-    def set_log(self, enabled: bool) -> None:
-        if enabled == self._log_enabled:
-            return
-        self._log_enabled = enabled
-        self._recompute_display(autolevel=True)
+    def update_processed(self, img: np.ndarray) -> None:
+        """Swap the displayed (already-processed) image, keeping ROIs and zoom.
 
-    def log_enabled(self) -> bool:
-        return self._log_enabled
-
-    # --- preprocessing chain ----------------------------------------------
-    def set_preproc(self, ops: list) -> None:
-        """Set the resolved preprocessing chain.
-
-        Each op is a dict: {"type": "dark_subtract"|"flat_divide"|"normalize",
-        "data": ndarray|None}. Applied in list order, BEFORE the log stage.
-        Ops whose reference array shape mismatches the frame are ignored.
+        Used when the Core pipeline changes (preproc / log toggled). Unlike
+        :meth:`set_image` it does NOT clear fits or reset the view range.
         """
-        self._preproc = list(ops or [])
+        self._raw = np.asarray(img, dtype=np.float32)
         self._recompute_display(autolevel=True)
-
-    def _apply_preproc(self, raw: np.ndarray) -> np.ndarray:
-        src = raw
-        for op in self._preproc:
-            t = op.get("type")
-            data = op.get("data")
-            if t in ("dark_subtract", "flat_divide"):
-                if data is None or np.shape(data) != np.shape(raw):
-                    continue  # unusable reference -> skip silently
-            if t == "dark_subtract":
-                src = src - data
-            elif t == "flat_divide":
-                denom = np.where(np.abs(data) < 1e-12, np.nan, data)
-                src = src / denom
-            elif t == "normalize":
-                finite = src[np.isfinite(src)]
-                mx = float(finite.max()) if finite.size else 0.0
-                if mx > 0:
-                    src = src / mx
-        return src
-
-    def has_preproc(self) -> bool:
-        """True if any background-type op (subtract/divide) is active."""
-        return any(
-            op.get("type") in ("dark_subtract", "flat_divide", "normalize")
-            for op in self._preproc
-        )
 
     def set_colormap(self, name: str) -> None:
         try:
@@ -654,9 +618,7 @@ class ImageView(QtWidgets.QWidget):
 
     def _on_rect_draw_update(self, p0, cur) -> None:
         x0, y0, x1, y1 = p0.x(), p0.y(), cur.x(), cur.y()
-        self._rect_preview.setRect(
-            min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)
-        )
+        self._rect_preview.setRect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
 
     def _on_rect_draw_finish(self, p0, p1) -> None:
         self._rect_preview.setVisible(False)
@@ -774,7 +736,7 @@ class ImageView(QtWidgets.QWidget):
         try:
             roi.sigRegionChanged.disconnect()
             roi.sigRegionChangeStarted.disconnect()
-        except (TypeError, RuntimeError):
+        except TypeError, RuntimeError:
             pass
         if roi is self._active_line:
             self._active_line = None
@@ -791,7 +753,7 @@ class ImageView(QtWidgets.QWidget):
         if prev is not None:
             try:
                 prev.setPen(prev._base_pen)
-            except (RuntimeError, AttributeError):
+            except RuntimeError, AttributeError:
                 pass
         self._selected_roi = roi
         if roi is not None:
@@ -811,7 +773,7 @@ class ImageView(QtWidgets.QWidget):
         if self._active_line is not None:
             try:
                 self._active_line.sigRegionChanged.disconnect(self._emit_active_profile)
-            except (TypeError, RuntimeError):
+            except TypeError, RuntimeError:
                 pass
         self._active_line = roi
         if roi is not None:
@@ -829,8 +791,11 @@ class ImageView(QtWidgets.QWidget):
             return
         vals = np.asarray(vals, dtype=float).ravel()
         idx = np.arange(vals.size, dtype=float)
-        axis, unit = (idx * self._px_size, self._px_unit) if self._scale_calibrated \
+        axis, unit = (
+            (idx * self._px_size, self._px_unit)
+            if self._scale_calibrated
             else (idx, "px")
+        )
         self.lineProfileChanged.emit(axis, vals, unit)
 
     # ---------------------------------------------------------- distance tool
@@ -882,9 +847,7 @@ class ImageView(QtWidgets.QWidget):
     def fit_ellipse(self) -> dict | None:
         """Fit an ellipse to the picked points and draw it. Returns geometry."""
         if len(self._points) < 5:
-            self.fitReported.emit(
-                f"Need at least 5 points (have {len(self._points)})."
-            )
+            self.fitReported.emit(f"Need at least 5 points (have {len(self._points)}).")
             return None
         pts = np.array(self._points, dtype=float)
         try:

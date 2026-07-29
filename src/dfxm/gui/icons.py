@@ -1,6 +1,7 @@
 from pathlib import Path
-from PySide6 import QtGui
+
 import qtawesome as qta
+from PySide6 import QtGui
 
 # repo root anchored to this file, not CWD
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -12,6 +13,7 @@ LOGO_PATH = ASSETS_DIR / "logo.png"
 APP_ICON_QTA = "fa5s.x-ray"
 APP_ICON_COLOR = "#4da3ff"
 
+
 def logo_icon() -> QtGui.QIcon:
     if LOGO_PATH.exists():
         icon = QtGui.QIcon(str(LOGO_PATH))
@@ -22,11 +24,14 @@ def logo_icon() -> QtGui.QIcon:
     except Exception:
         return QtGui.QIcon()
 
+
 def logo_pixmap(size: int = 120) -> QtGui.QPixmap:
     if LOGO_PATH.exists():
         pm = QtGui.QPixmap(str(LOGO_PATH))
         if not pm.isNull():
-            return pm.scaled(size, size, QtGui.Qt.KeepAspectRatio, QtGui.Qt.SmoothTransformation)
+            return pm.scaled(
+                size, size, QtGui.Qt.KeepAspectRatio, QtGui.Qt.SmoothTransformation
+            )
     try:
         return qta.icon(APP_ICON_QTA, color=APP_ICON_COLOR).pixmap(size, size)
     except Exception:
@@ -37,7 +42,7 @@ class AppIcons:
     # 검증된 QtAwesome 아이콘 키값들
     HAND = "fa5s.hand-paper"
     FOLDER = "ph.folder-open-bold"
-    CAMERA = "fa5s.camera"               # <--- 'msc.camera' 수정!
+    CAMERA = "fa5s.camera"  # <--- 'msc.camera' 수정!
     DEFAULT_ZOOM = "fa5s.expand-arrows-alt"
     PAN = "fa5s.hand-paper"
     ZOOM_IN = "fa5s.search-plus"
@@ -58,9 +63,11 @@ class AppIcons:
             return qta.icon(name_or_qta, color=color)
         except Exception:
             return QtGui.QIcon()
-            
+
     @staticmethod
-    def get_pixmap(name_or_qta: str, size: int = 14, color: str = "#ffffff") -> QtGui.QPixmap:
+    def get_pixmap(
+        name_or_qta: str, size: int = 14, color: str = "#ffffff"
+    ) -> QtGui.QPixmap:
         """QSS 또는 QPainter용 Pixmap 반환"""
         icon = AppIcons.get(name_or_qta, color=color)
         return icon.pixmap(size, size)
