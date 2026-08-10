@@ -117,6 +117,13 @@ def load_dataset(h5_file: Path | str, dataset_path: str) -> np.ndarray:
     return img
 
 
+def dataset_shape(h5_file: Path | str, dataset_path: str) -> tuple:
+    """Shape of a dataset without loading it (squeezed, as `load_*` returns)."""
+    with h5py.File(h5_file, "r") as hf:
+        shape = tuple(hf[dataset_path].shape)
+    return tuple(d for d in shape if d != 1) or shape
+
+
 IMAGE_SUFFIXES = (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp")
 H5_SUFFIXES = (".h5", ".hdf5")
 TEXT_SUFFIXES = (".json", ".txt")
@@ -145,6 +152,40 @@ def load_image_file(path: Path | str) -> np.ndarray:
     if img.ndim != 2:
         raise ValueError(f"Unsupported image shape {img.shape} in {path}")
     return img.astype(np.float32)
+
+
+def save_tif(img: np.ndarray, path: Path | str) -> Path:
+    """Write a 2-D array as an ImageJ-compatible float32 TIFF."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(path, np.asarray(img, dtype=np.float32), imagej=True)
+    return path
+
+
+def iter_h5_files(root: Path | str, recursive: bool = True) -> list[Path]:
+    """Every HDF5 file at ``root`` (a file yields itself)."""
+    root = Path(root)
+    if root.is_file():
+        return [root]
+    pattern = "**/*" if recursive else "*"
+    return sorted(p for p in root.glob(pattern) if p.suffix.lower() in H5_SUFFIXES)
+
+
+def h5_to_tif(
+    h5_file: Path | str,
+    out_tif: Path | str,
+    dataset_path: str | None = None,
+    frame: FramePath | None = None,
+) -> Path:
+    """Export one detector frame of an HDF5 file to TIFF.
+
+    Without ``dataset_path`` / ``frame`` the first available frame is used.
+    """
+    if dataset_path:
+        img = load_dataset(h5_file, dataset_path)
+    else:
+        img = load_frame(h5_file, frame)
+    return save_tif(img, out_tif)
 
 
 def load_frame(h5_file: Path | str, frame: FramePath | None = None) -> np.ndarray:

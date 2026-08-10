@@ -1,37 +1,49 @@
+[project]
+name = "dfxm"
+version = "0.1.0"
+description = "DFXM detector-image analysis engine with a CLI and a PySide6 GUI"
+readme = "README.md"
+requires-python = ">=3.14"
+# Headless base: the Core engine + the CLI. No Qt here on purpose — a batch /
+# beamline machine installs only this. The desktop app is the `gui` extra.
+dependencies = [
+    "h5py>=3.16.0",
+    "numpy>=2.5.1",
+    "opencv-python>=5.0.0.93",
+    "pandas>=2.2.0",
+    "tifffile>=2026.6.1",
+]
+
+[project.optional-dependencies]
+gui = [
+    "matplotlib>=3.11.0",   # pyqtgraph colormap source
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.11.1",
+    "qtawesome>=1.4.2",
+]
+cuda = ["cupy-cuda13x[ctk]>=14.1.1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dfxm"]
+
 [project.scripts]
-dfxm-gui = "dfxm.gui.__main__:main"
-opticalc = "dfxm.gui.__main__:main"
 dfxm = "dfxm.cli:main"
+dfxm-gui = "dfxm.gui.__main__:main"
 
 [dependency-groups]
 dev = [
+    "dfxm[gui]",        # local dev works on the full app; headless installs skip it
+    "ipykernel>=7.3.0",
     "nuitka>=4.1.3",
     "ruff>=0.16.0",
     "taskipy>=1.14.1",
 ]
 
-[project]
-name = "dfxm"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.14"
-dependencies = [
-    "cupy-cuda13x[ctk]>=14.1.1",
-    "h5py>=3.16.0",
-    "ipykernel>=7.3.0",
-    "matplotlib>=3.11.0",
-    "nuitka>=4.1.3",
-    "numpy>=2.5.1",
-    "opencv-python>=5.0.0.93",
-    "pandas>=2.2.0",
-    "pyqtgraph>=0.14.0",
-    "pyside6>=6.11.1",
-    "qtawesome>=1.4.2",
-    "scikit-image>=0.26.0",
-    "tifffile>=2026.6.1",
-]
-
 [tool.taskipy.tasks]
-dev = "python src/main.py"
-build = "python build.py"
+gui = "python -m dfxm.gui"
+cli = "python -m dfxm.cli"
+lint = "ruff check src && ruff format --check src"

@@ -4,23 +4,59 @@
 
 ```
 src/dfxm/
-  core/            ← Pure engine. ZERO Qt/GUI imports. numpy/scipy/pandas/h5py only.
-    io.py          h5 / image loading, FramePath, H5Node
+  core/            ← Pure engine. ZERO Qt/GUI imports. numpy/pandas/h5py/tifffile only.
+    io.py          h5 / image loading + TIFF export, FramePath, H5Node
     transform.py   pixel transforms (adaptive_log)
     fitting.py     ellipse least-squares (Halir–Flusser) + geometry + Sampson error
     ops.py         Operation (kind+params) + OP_REGISTRY (pure funcs) + apply_op
     history.py     History — immutable ordered op sequence, JSON (de)serialize
     results.py     FitResult + ResultsFrame (pandas Master table, no Qt)
     dataset.py     DFXMDataset — fluent immutable domain object
+  cli/             ← Headless front-end. Imports Core; never imports Qt.
+    __init__.py    subcommands: fit / convert / info / gui, build_parser(), main()
+    spec.py        recipe ⇄ argv translation (`--op sub_bg:/dark`), pure
+    __main__.py    python -m dfxm.cli
   gui/             ← View only. Calls Core, reflects results. No pixel math.
+    __main__.py    launcher; `--cli` routes to dfxm.cli (single frozen binary)
+    cli_bridge.py  CliJob — runs `dfxm ...` as a QProcess, streams output
     models.py      MasterTableModel (QAbstractTableModel) over Core ResultsFrame
     image_view.py  dumb display of a processed ndarray
     main_window.py orchestration; DocumentSession.ds holds a DFXMDataset
-  cli.py           ← Batch front-end over Core (same pipeline, scripted)
-  io.py / transform.py / ellipse_fit.py   ← thin back-compat shims → core
 ```
 
-Verified invariant: `import dfxm.core` pulls in **no** PySide6.
+Dependency direction: `core ← cli ← gui`. Nothing points back.
+Verified invariants: `import dfxm.cli` pulls in **no** PySide6; the base install
+has no Qt at all (Qt lives in the `gui` extra).
+
+## Two front-ends, one engine
+
+| | install | entry point |
+|---|---|---|
+| headless / beamline / batch | `pip install dfxm` | `dfxm fit\|convert\|info` |
+| desktop | `pip install dfxm[gui]` | `dfxm gui`, `dfxm-gui`, `python -m dfxm.gui` |
+
+`dfxm gui` imports Qt lazily inside the command, so a Qt-less install still
+parses every other subcommand and fails with an install hint only if the GUI is
+actually asked for.
+
+## GUI → CLI
+
+Batch work started from the GUI goes out through the same command line a user
+could have typed, as a child process (`gui/cli_bridge.py`):
+
+```python
+from .cli_bridge import CliJob, argv_for_dataset
+job = CliJob(self)
+job.line.connect(self._log)                    # stdout/stderr, line by line
+job.finished_ok.connect(self._on_job_done)     # exit code
+job.start(argv_for_dataset(doc.ds, points_file=pts, out="results.csv"))
+```
+
+`cli.spec` owns both directions of the translation (`parse_op` /
+`format_op`), so "what the GUI runs" and "what the CLI accepts" cannot drift.
+A subprocess (rather than an in-process call) keeps the event loop free, makes
+a job cancellable, contains crashes, and yields a printable, reproducible
+command (`command_line(argv)`).
 
 ## DFXMDataset — fluent, immutable
 
@@ -72,6 +108,9 @@ fit_error, points_json, bg_applied, log_scale`
   EXCLUDE flag (`_toggle_exclude`) survives re-fitting and dims the row.
 - Phase 3: SQLite `.dfxm_proj` autosave/restore via `DFXMDataset.to_dict()` /
   `ResultsFrame`; ROI-drag ↔ table live sync. Undo/Redo already supported by the
-  immutable history.
+  immutable history. Session persistence belongs in `core/` (a `.dfxm_proj` must
+  be readable headlessly) — the old empty `dfxm/session/` stub was removed.
+- Next for GUI → CLI: a "batch this recipe over N shots" panel on top of
+  `CliJob` (queue, progress, cancel) — the plumbing is there, the UI is not.
 
 Preproc ops: sub_bg, divide, log (adaptive), pure_log, sqrt, gamma(γ), normalize.

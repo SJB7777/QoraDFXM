@@ -13,8 +13,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .. import io
-from ..core import DFXMDataset
+from ..core import DFXMDataset, io
 from ..core.history import History
 from ..core.results import MASTER_COLUMNS, ResultsFrame
 from .icons import AppIcons, logo_icon, logo_pixmap
@@ -2443,6 +2442,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _cur_settings(self) -> dict | None:
         doc = self._cur()
         return doc.view_settings if doc and doc.kind == "image" else None
+
+    def open_path(self, path: Path) -> None:
+        """Public entry used by the launcher (``dfxm gui FILE ...``)."""
+        self._open_document(Path(path))
 
     def _open_document(self, path: Path, preview: bool = False) -> None:
         path = Path(path)
