@@ -572,8 +572,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # A dropped folder becomes the file-tree root for convenient browsing.
         for p in paths:
             if p.is_dir():
-                self._fs_model.setRootPath(str(p))
-                self._tree.setRootIndex(self._fs_model.index(str(p)))
+                self._set_tree_root(p)
                 break
         for f in files:
             self._open_document(f, preview=False)
@@ -1624,7 +1623,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
 
-        tabs.addTab(self._tree, "파일")
+        tabs.addTab(self._build_files_page(), "파일")
 
         # HDF5 structure viewer
         self._struct_tree = QtWidgets.QTreeWidget()
@@ -1644,6 +1643,97 @@ class MainWindow(QtWidgets.QMainWindow):
         dock.setWidget(tabs)
         dock.setMinimumWidth(280)
         self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, dock)
+
+    def _build_files_page(self) -> QtWidgets.QWidget:
+        """The tree plus a ".." row — QFileSystemModel has no parent entry."""
+        page = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        self._up_btn = QtWidgets.QToolButton()
+        self._up_btn.setText("..")
+        self._up_btn.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogToParent)
+        )
+        self._up_btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self._up_btn.setAutoRaise(True)
+        self._up_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        self._up_btn.setStyleSheet(
+            "QToolButton { text-align: left; padding: 4px 6px; }"
+        )
+        self._up_btn.clicked.connect(self._go_up_dir)
+        lay.addWidget(self._up_btn)
+        lay.addWidget(self._tree)
+
+        # Backspace = go up. An event filter rather than a QShortcut: the tree
+        # owns the key while it has focus, and it stays testable head-less.
+        self._tree.installEventFilter(self)
+
+        self._update_up_row()
+        return page
+
+    def eventFilter(self, obj, event) -> bool:
+        if (
+            obj is getattr(self, "_tree", None)
+            and event.type() == QtCore.QEvent.KeyPress
+            and event.key() == QtCore.Qt.Key_Backspace
+        ):
+            self._go_up_dir()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _tree_root(self) -> Path | None:
+        """The folder the tree is rooted at, or None when showing every drive."""
+        path = self._fs_model.filePath(self._tree.rootIndex())
+        return Path(path) if path else None
+
+    def _update_up_row(self) -> None:
+        root = self._tree_root()
+        self._up_btn.setEnabled(root is not None)
+        self._up_btn.setToolTip(
+            "상위 폴더로 (Backspace)"
+            if root is None
+            else f"상위 폴더로: {root.parent if root.parent != root else '드라이브 목록'}"
+            "   (Backspace)"
+        )
+
+    def _go_up_dir(self) -> None:
+        root = self._tree_root()
+        if root is None:
+            return  # already at the top: the whole filesystem is listed
+        parent = root.parent
+        if parent == root:  # C:\ etc — step out to the list of drives
+            self._fs_model.setRootPath("")
+            self._tree.setRootIndex(self._fs_model.index(""))
+            self._update_up_row()
+            return
+        self._set_tree_root(parent)
+        # Land on the folder we came out of, so the way back is one keypress.
+        self._select_in_tree_when_loaded(root)
+        self._settings.setValue("last_dir", str(parent))
+
+    def _select_in_tree_when_loaded(self, path: Path) -> None:
+        """Select a path, waiting for QFileSystemModel to populate if needed."""
+
+        def select() -> bool:
+            index = self._fs_model.index(str(path))
+            if not index.isValid():
+                return False
+            self._tree.setCurrentIndex(index)
+            self._tree.scrollTo(index)
+            return True
+
+        if select():
+            return
+
+        def on_loaded(loaded: str) -> None:
+            if Path(loaded) == path.parent and select():
+                self._fs_model.directoryLoaded.disconnect(on_loaded)
+
+        self._fs_model.directoryLoaded.connect(on_loaded)
 
     # -------------------------------------------------- 파일 트리 컨텍스트 메뉴
     def _on_tree_context_menu(self, pos: QtCore.QPoint) -> None:
@@ -2416,6 +2506,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Root the file tree AT this folder, not the whole disk."""
         self._fs_model.setRootPath(str(folder))
         self._tree.setRootIndex(self._fs_model.index(str(folder)))
+        if hasattr(self, "_up_btn"):
+            self._update_up_row()
 
     @staticmethod
     def _cmap_icon(name: str, w: int = 96, h: int = 14) -> QtGui.QIcon:
@@ -2856,8 +2948,7 @@ class MainWindow(QtWidgets.QMainWindow):
         start = self._dialog_start_dir()
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "폴더 선택", start)
         if path:
-            self._fs_model.setRootPath(path)
-            self._tree.setRootIndex(self._fs_model.index(path))
+            self._set_tree_root(Path(path))
             self._settings.setValue("last_dir", path)
 
     def _open_file(self) -> None:

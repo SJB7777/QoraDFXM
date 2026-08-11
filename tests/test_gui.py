@@ -145,6 +145,66 @@ def test_ring_panel_measures_linear_data_even_with_log_on(main_window, ring_tif)
     assert main_window._ring_panel.profile.peak() == pytest.approx(linear_peak)
 
 
+# ------------------------------------------------------ explorer ".." row
+def test_up_row_moves_the_tree_to_the_parent(main_window, tmp_path):
+    child = tmp_path / "run01"
+    child.mkdir()
+    main_window._set_tree_root(child)
+    assert main_window._tree_root() == child
+
+    main_window._up_btn.click()
+    assert main_window._tree_root() == tmp_path
+
+
+def test_up_row_selects_the_folder_it_came_from(main_window, tmp_path, pump):
+    child = tmp_path / "run01"
+    child.mkdir()
+    main_window._set_tree_root(child)
+    main_window._go_up_dir()
+    pump(200)
+    from pathlib import Path
+
+    current = main_window._fs_model.filePath(main_window._tree.currentIndex())
+    assert Path(current) == child  # Qt hands back forward slashes on Windows
+
+
+def test_backspace_goes_up(main_window, tmp_path, pump):
+    from PySide6 import QtCore, QtGui, QtWidgets
+
+    child = tmp_path / "run01"
+    child.mkdir()
+    main_window._set_tree_root(child)
+    main_window._tree.setFocus()
+    QtWidgets.QApplication.sendEvent(
+        main_window._tree,
+        QtGui.QKeyEvent(
+            QtCore.QEvent.KeyPress, QtCore.Qt.Key_Backspace, QtCore.Qt.NoModifier
+        ),
+    )
+    pump(200)
+    assert main_window._tree_root() == tmp_path
+
+
+def test_up_row_is_disabled_when_every_drive_is_listed(main_window):
+    main_window._fs_model.setRootPath("")
+    main_window._tree.setRootIndex(main_window._fs_model.index(""))
+    main_window._update_up_row()
+    assert main_window._tree_root() is None
+    assert not main_window._up_btn.isEnabled()
+
+    main_window._go_up_dir()  # must be a no-op, not a crash
+    assert main_window._tree_root() is None
+
+
+def test_up_row_from_a_drive_root_lists_the_drives(main_window, tmp_path):
+    from pathlib import Path
+
+    root = Path(tmp_path.anchor or "/")
+    main_window._set_tree_root(root)
+    main_window._go_up_dir()
+    assert main_window._tree_root() is None
+
+
 # ------------------------------------------------ explorer arrow-key preview
 def test_arrow_keys_move_the_preview(main_window, three_tifs, pump):
     from PySide6 import QtCore, QtGui, QtWidgets
