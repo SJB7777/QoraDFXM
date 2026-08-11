@@ -44,7 +44,7 @@ def test_apply_to_pushes_every_field(qapp):
         unit="nm",
         tool="line",
     ).apply_to(view)
-    pushed = {name: args for name, args in view.calls}
+    pushed = dict(view.calls)
     assert pushed["set_colormap"] == ("magma",)
     assert pushed["set_overmax"] == (False,)
     assert pushed["set_scale"] == (0.5, "nm")

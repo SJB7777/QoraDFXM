@@ -46,11 +46,11 @@ def list_frames(h5_file: Path | str) -> list[FramePath]:
         run = hf.get("run")
         if run is None:
             return frames
-        for scan in run.keys():
+        for scan in run:
             det = run.get(f"{scan}/det")
             if det is None:
                 continue
-            for detector in det.keys():
+            for detector in det:
                 if "data" in det[detector]:
                     frames.append(FramePath(scan=scan, detector=detector))
     return frames
@@ -75,16 +75,16 @@ def read_structure(h5_file: Path | str) -> H5Node:
     def visit(name: str, obj) -> H5Node:
         attrs = {k: _attr_repr(v) for k, v in obj.attrs.items()}
         if isinstance(obj, h5py.Group):
-            children = [visit(f"{name}/{k}" if name else k, obj[k]) for k in obj.keys()]
+            children = [visit(f"{name}/{k}" if name else k, obj[k]) for k in obj]
             return H5Node(
-                name=name.split("/")[-1] or "/",
+                name=name.rsplit("/", maxsplit=1)[-1] or "/",
                 path="/" + name if name else "/",
                 is_group=True,
                 attrs=attrs,
                 children=children,
             )
         return H5Node(
-            name=name.split("/")[-1],
+            name=name.rsplit("/", maxsplit=1)[-1],
             path="/" + name,
             is_group=False,
             shape=tuple(obj.shape),
@@ -94,7 +94,7 @@ def read_structure(h5_file: Path | str) -> H5Node:
 
     with h5py.File(h5_file, "r") as hf:
         root = H5Node(name="/", path="/", is_group=True, attrs={}, children=[])
-        root.children = [visit(k, hf[k]) for k in hf.keys()]
+        root.children = [visit(k, hf[k]) for k in hf]
     return root
 
 

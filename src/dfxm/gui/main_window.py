@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pyqtgraph as pg
@@ -117,8 +118,8 @@ QToolButton:hover { background: %HOVER%; border-color: %BORDER2%; }
 QToolButton:checked { background: %ACCBG%; color: %SELTEXT%; }
 QScrollArea { border: 1px solid %BORDER%; }
 
-QCheckBox { 
-    padding: 2px 0; 
+QCheckBox {
+    padding: 2px 0;
     spacing: 6px;
 }
 
@@ -1305,7 +1306,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ESC always returns to Select mode
         esc = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Escape), self)
-        esc.activated.connect(lambda: self._tool_actions["select"].trigger())
+        esc.activated.connect(self._tool_actions["select"].trigger)
         # Delete removes selected ROI
         dsc = QtGui.QShortcut(QtGui.QKeySequence.Delete, self)
         dsc.activated.connect(self._delete_selected_roi)
@@ -1578,7 +1579,7 @@ class MainWindow(QtWidgets.QMainWindow):
         f.setFixedWidth(1)
         return f
 
-    _TOOL_PAGE = {
+    _TOOL_PAGE: ClassVar[dict[str, tuple[str, str]]] = {
         "select": ("view", "선택 / 이동"),
         "pan": ("view", "이동 / 확대"),
         "zoom": ("view", "이동 / 확대"),
@@ -1846,7 +1847,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if platform.system() == "Windows":
                 import subprocess
 
-                subprocess.run(["explorer", "/select,", str(abs_path)])
+                subprocess.run(["explorer", "/select,", str(abs_path)], check=False)
                 return
             target_url = QtCore.QUrl.fromLocalFile(str(abs_path.parent))
         else:
@@ -2176,7 +2177,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log(f"상태 변경: 행 {r + 1} → {new}")
 
     # ------------------------------------------- shot inspector (sidebar)
-    _INSP_HINT_COLS = {
+    _INSP_HINT_COLS: ClassVar[set[str]] = {
         "center_x",
         "center_y",
         "major_axis",
@@ -2313,8 +2314,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _add_dropped_files(self, paths: list) -> None:
         """Files dragged onto the table → basic-info rows (filename/frames)."""
         added = 0
-        for p in paths:
-            p = Path(p)
+        for raw in paths:
+            p = Path(raw)
             if p.is_dir() or p.suffix.lower() not in self._SUPPORTED:
                 continue
             if p.suffix.lower() in io.H5_SUFFIXES:
@@ -2502,7 +2503,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_distance(self, seg, cum, unit: str) -> None:
         self._dist_table.setRowCount(len(seg))
-        for i, (s, c) in enumerate(zip(seg, cum)):
+        for i, (s, c) in enumerate(zip(seg, cum, strict=False)):
             self._dist_table.setItem(
                 i, 0, QtWidgets.QTableWidgetItem(f"{i + 1}→{i + 2}")
             )

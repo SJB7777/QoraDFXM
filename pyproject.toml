@@ -44,6 +44,32 @@ dev = [
     "taskipy>=1.14.1",
 ]
 
+[tool.ruff.lint]
+# Explicit so CI matches any developer machine, whatever their global config.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF", "PL", "S", "DTZ"]
+ignore = [
+    "DTZ005",  # per-file operation logs are local wall-clock on purpose
+    "PLR2004", # magic numbers are fine in layout/geometry code
+    "PLC0415", # local imports are deliberate: Qt stays out of the CLI's import path
+    "PLR0911", # long dispatch chains in the GUI read fine
+    "PLR0913",
+    "PLR0915", # widget builders are long by nature
+    "RUF001",  # Korean UI text and µ/× are not "ambiguous" here
+    "RUF002",
+    "RUF003",
+    "E501",    # the formatter owns code width; long strings/comments stay put
+    "SIM105",  # explicit try/except/pass reads better than contextlib.suppress here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The GUI must never die on a bad file, a missing icon, or a Qt quirk: broad
+# excepts there are the policy, not an oversight.
+"src/dfxm/gui/*" = ["BLE001", "S110"]
+"src/dfxm/gui/models.py" = ["BLE001", "B008"]  # B008: QModelIndex() default is Qt's own signature
+# Launching the OS file manager / the interpreter under test is the point.
+"src/dfxm/gui/main_window.py" = ["BLE001", "S110", "S603", "S607"]
+"tests/*" = ["S101", "S603", "PLR2004"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

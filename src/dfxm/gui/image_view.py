@@ -11,6 +11,8 @@ the least-squares fitter in :mod:`dfxm.ellipse_fit` (requirement 6).
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -127,7 +129,7 @@ class ImageView(QtWidgets.QWidget):
     #: Valid tool names.  "select" = pointer (default; ESC returns here).
     TOOLS = ("select", "pan", "zoom", "distance", "line", "ellipse", "rect")
 
-    _CURSORS = {
+    _CURSORS: ClassVar[dict] = {
         "select": QtCore.Qt.ArrowCursor,
         "pan": QtCore.Qt.OpenHandCursor,
         "zoom": QtCore.Qt.CrossCursor,
@@ -591,7 +593,7 @@ class ImageView(QtWidgets.QWidget):
             self._overlay_item.clear()
             return
         rgba = np.zeros((*self._display.shape, 4), dtype=np.ubyte)
-        rgba[mask] = self._overmax_color + (255,)
+        rgba[mask] = (*self._overmax_color, 255)
         self._overlay_item.setImage(rgba, autoLevels=False)
 
     # --------------------------------------------------------------- cursor

@@ -43,7 +43,7 @@ def fit_ellipse(x, y):
     M = S1 + S2 @ T
     M = np.array([M[2] / 2.0, -M[1], M[0] / 2.0])
 
-    evals, evecs = np.linalg.eig(M)
+    _evals, evecs = np.linalg.eig(M)
 
     cond = 4.0 * evecs[0] * evecs[2] - evecs[1] ** 2
     idx = np.argmax(cond)

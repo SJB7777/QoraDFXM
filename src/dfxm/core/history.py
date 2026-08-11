@@ -17,7 +17,7 @@ class History:
     ops: tuple = ()
 
     def add(self, op: Operation) -> History:
-        return History(self.ops + (op,))
+        return History((*self.ops, op))
 
     def pop(self) -> History:
         """Drop the last op (Undo)."""

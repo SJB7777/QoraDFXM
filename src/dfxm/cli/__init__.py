@@ -214,8 +214,18 @@ def cmd_gui(args) -> int:
 
 
 # ---------------------------------------------------------------- parser
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("dfxm")
+    except PackageNotFoundError:  # running from a source checkout
+        return "0.0.0+source"
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="dfxm", description="DFXM batch analysis")
+    p.add_argument("-V", "--version", action="version", version=f"dfxm {_version()}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     f = sub.add_parser("fit", help="preprocess (+ optionally ellipse-fit) a shot")

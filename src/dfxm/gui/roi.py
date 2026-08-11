@@ -181,6 +181,6 @@ class RectRegionROI(pg.RectROI, AnalysisROI):
     def region_slice(self):
         """(row_slice, col_slice) for indexing the image array, clamped >=0."""
         x, y, wd, ht = self.bounds
-        x0, y0 = int(round(min(x, x + wd))), int(round(min(y, y + ht)))
-        x1, y1 = int(round(max(x, x + wd))), int(round(max(y, y + ht)))
+        x0, y0 = round(min(x, x + wd)), round(min(y, y + ht))
+        x1, y1 = round(max(x, x + wd)), round(max(y, y + ht))
         return slice(max(0, y0), max(0, y1)), slice(max(0, x0), max(0, x1))

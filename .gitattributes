@@ -1,0 +1,10 @@
+# One line ending everywhere: LF in the repo and in the working tree, so
+# Windows checkouts stop rewriting every file (and warning about it).
+* text=auto eol=lf
+
+*.png binary
+*.tif binary
+*.tiff binary
+*.h5 binary
+*.hdf5 binary
+*.ico binary
