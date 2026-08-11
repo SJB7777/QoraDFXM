@@ -273,6 +273,94 @@ def test_up_row_from_a_drive_root_lists_the_drives(main_window, tmp_path):
     assert main_window._tree_root() is None
 
 
+# --------------------------------------------------------- explorer filter
+@pytest.fixture
+def mixed_folder(tmp_path):
+    for name in ("shockwave_01.tif", "shockwave_02.tif", "alignment_01.tif"):
+        tifffile.imwrite(tmp_path / name, np.zeros((4, 4), np.float32))
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    return tmp_path
+
+
+def listing(main_window) -> list[str]:
+    from pathlib import Path
+
+    model, root = main_window._fs_model, main_window._tree.rootIndex()
+    return sorted(
+        Path(model.filePath(model.index(r, 0, root))).name
+        for r in range(model.rowCount(root))
+    )
+
+
+def test_filter_narrows_the_listing(main_window, mixed_folder, pump):
+    main_window._set_tree_root(mixed_folder)
+    pump(300)
+    assert "alignment_01.tif" in listing(main_window)
+
+    main_window._filter_edit.setText("shock")
+    pump(300)
+    names = listing(main_window)
+    assert names.count("shockwave_01.tif") == 1
+    assert "alignment_01.tif" not in names and "notes.txt" not in names
+
+
+def test_filter_keeps_folders_visible(main_window, mixed_folder, pump):
+    """Otherwise you could not browse while a filter is active."""
+    main_window._set_tree_root(mixed_folder)
+    main_window._filter_edit.setText("shock")
+    pump(300)
+    assert "sub" in listing(main_window)
+
+
+def test_clearing_the_filter_restores_everything(main_window, mixed_folder, pump):
+    main_window._set_tree_root(mixed_folder)
+    pump(300)
+    full = listing(main_window)
+    main_window._filter_edit.setText("shock")
+    pump(300)
+    main_window._filter_edit.clear()
+    pump(300)
+    assert listing(main_window) == full
+
+
+def test_filter_survives_changing_folder(main_window, mixed_folder, pump):
+    (mixed_folder / "sub" / "shockwave_09.tif").parent.mkdir(exist_ok=True)
+    tifffile.imwrite(
+        mixed_folder / "sub" / "shockwave_09.tif", np.zeros((4, 4), np.float32)
+    )
+    tifffile.imwrite(mixed_folder / "sub" / "other.tif", np.zeros((4, 4), np.float32))
+    main_window._set_tree_root(mixed_folder)
+    main_window._filter_edit.setText("shock")
+    pump(300)
+    main_window._set_tree_root(mixed_folder / "sub")
+    pump(300)
+    assert listing(main_window) == ["shockwave_09.tif"]
+
+
+def test_escape_clears_the_filter_and_returns_to_the_tree(
+    main_window, mixed_folder, pump
+):
+    from PySide6 import QtCore
+    from PySide6.QtTest import QTest
+
+    main_window._set_tree_root(mixed_folder)
+    main_window._filter_edit.setFocus()
+    main_window._filter_edit.setText("shock")
+    pump(200)
+    QTest.keyClick(main_window._filter_edit, QtCore.Qt.Key_Escape)
+    pump(300)
+    assert main_window._filter_edit.text() == ""
+    assert "alignment_01.tif" in listing(main_window)
+
+
+def test_ctrl_f_focuses_the_filter(main_window):
+    main_window._focus_filter()
+    # hasFocus() needs an active window, which an offscreen test never has
+    assert main_window.focusWidget() is main_window._filter_edit
+    assert main_window._file_dock.isVisible()
+
+
 def test_double_clicking_a_folder_reroots_the_tree(main_window, tmp_path, pump):
     child = tmp_path / "run01"
     child.mkdir()

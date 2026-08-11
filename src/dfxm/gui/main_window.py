@@ -472,8 +472,38 @@ class SettingsDialog(QtWidgets.QDialog):
         }
 
 
+class FilterEdit(QtWidgets.QLineEdit):
+    """Explorer filter box: Escape clears it and hands focus back to the tree.
+
+    The window binds Escape to "select tool", and a window-level shortcut wins
+    over the focused widget — so the box has to claim the key first by
+    accepting the ShortcutOverride, which is Qt's way of saying "this is mine
+    while I have focus".
+    """
+
+    escaped = QtCore.Signal()
+
+    def event(self, ev) -> bool:
+        if (
+            ev.type() == QtCore.QEvent.ShortcutOverride
+            and ev.key() == QtCore.Qt.Key_Escape
+        ):
+            ev.accept()
+            return True
+        return super().event(ev)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.clear()
+            self.escaped.emit()
+            return
+        super().keyPressEvent(event)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     _SUPPORTED = io.H5_SUFFIXES + io.IMAGE_SUFFIXES + io.TEXT_SUFFIXES
+    # What the explorer lists; the filter box narrows these further.
+    _FILE_GLOBS = tuple(f"*{suf}" for suf in _SUPPORTED)
 
     def __init__(self) -> None:
         super().__init__()
@@ -1584,20 +1614,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs = QtWidgets.QTabWidget()
 
         self._fs_model = QtWidgets.QFileSystemModel()
-        self._fs_model.setNameFilters(
-            [
-                "*.h5",
-                "*.hdf5",
-                "*.tif",
-                "*.tiff",
-                "*.png",
-                "*.jpg",
-                "*.jpeg",
-                "*.bmp",
-                "*.json",
-                "*.txt",
-            ]
-        )
+        self._fs_model.setNameFilters(list(self._FILE_GLOBS))
         self._fs_model.setNameFilterDisables(False)
         self._fs_model.setRootPath("")
 
@@ -1647,11 +1664,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, dock)
 
     def _build_files_page(self) -> QtWidgets.QWidget:
-        """The tree plus a ".." row — QFileSystemModel has no parent entry."""
+        """The tree plus a filter box and a ".." row (the model has neither)."""
         page = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(page)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
+
+        self._filter_edit = FilterEdit()
+        self._filter_edit.escaped.connect(self._tree.setFocus)
+        self._filter_edit.setPlaceholderText("이름 필터  (Ctrl+F)")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.setToolTip(
+            "현재 폴더에서 이름이 맞는 파일만 표시합니다 (Esc: 지우기)"
+        )
+        self._filter_edit.textChanged.connect(lambda _=None: self._filter_timer.start())
+        lay.addWidget(self._filter_edit)
+
+        # Typing is coalesced: each change re-evaluates the whole listing.
+        self._filter_timer = QtCore.QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(120)
+        self._filter_timer.timeout.connect(self._apply_name_filter)
+
+        find = QtGui.QShortcut(QtGui.QKeySequence.Find, self)
+        find.activated.connect(self._focus_filter)
 
         self._up_btn = QtWidgets.QToolButton()
         self._up_btn.setText("..")
@@ -1686,6 +1722,26 @@ class MainWindow(QtWidgets.QMainWindow):
             self._go_up_dir()
             return True
         return super().eventFilter(obj, event)
+
+    # ------------------------------------------------------- 이름 필터
+    def _focus_filter(self) -> None:
+        self._file_dock.show()
+        self._filter_edit.setFocus(QtCore.Qt.ShortcutFocusReason)
+        self._filter_edit.selectAll()
+
+    def _apply_name_filter(self) -> None:
+        """Narrow the listing to names containing the typed text.
+
+        QFileSystemModel filters on wildcards, so the text is folded into each
+        supported-extension glob; folders always stay visible, which is what
+        makes the filter usable while browsing.
+        """
+        text = self._filter_edit.text().strip()
+        if not text:
+            self._fs_model.setNameFilters(list(self._FILE_GLOBS))
+            return
+        stem = text.replace("*", "")
+        self._fs_model.setNameFilters([f"*{stem}{glob}" for glob in self._FILE_GLOBS])
 
     def _tree_root(self) -> Path | None:
         """The folder the tree is rooted at, or None when showing every drive."""
