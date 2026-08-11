@@ -106,8 +106,9 @@ def _style_spreadsheet(table: QtWidgets.QTableView) -> None:
 
 
 class ResultsWindow(QtWidgets.QMainWindow):
-    def __init__(self, table: QtWidgets.QTableView, actions, settings,
-                 parent=None) -> None:
+    def __init__(
+        self, table: QtWidgets.QTableView, actions, settings, parent=None
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("결과 표 — Master Table")
         self.setWindowFlag(QtCore.Qt.Window, True)

@@ -29,12 +29,30 @@ dfxm fit shot.h5 \
     --dataset /run/scan00001/det/eh1hama_img/data \
     --op sub_bg:/dark --op divide:flat.tif --op gamma:0.5 --op log \
     --points pts.json --out results.csv
+dfxm ring shot.h5 --points pts.json \
+    --k 0.5:2.0:0.005 --width 3 --out ring.csv --map ring_map.tif
 dfxm gui shot.h5                              # launch the desktop app
 ```
 
-Ops apply in the order given: `sub_bg:SRC`, `divide:SRC`, `log`, `pure_log`,
-`sqrt`, `gamma:0.5`, `normalize`. `SRC` starting with `/` (and not an image
-suffix) is a dataset inside the same HDF5; anything else is a file path.
+`ring` sweeps the fitted ellipse's scale `k` and reports the mean brightness
+along its contour (intensity per unit length), with `peak k` / FWHM printed and
+the curve written to CSV. The ellipse comes from `--points` or from a Master CSV
+(`--from-csv results.csv --shot-id …`). It measures on **linear** intensity —
+log/gamma ops are stripped unless you pass `--keep-log`.
+
+Ops apply in the order given:
+
+| op | meaning |
+|---|---|
+| `sub_bg:SRC` / `divide:SRC` | dark subtract / flat-field divide |
+| `log`, `pure_log`, `sqrt`, `gamma:0.5`, `normalize` | intensity transforms |
+| `scale:1.5`, `scale:2x0.5` | resize; `sxXsy` changes the aspect ratio |
+| `rotate:30` | rotate degrees, + = counter-clockwise (canvas expands) |
+| `flip:h` / `flip:v` / `flip:both` | mirror |
+
+`SRC` starting with `/` (and not an image suffix) is a dataset inside the same
+HDF5; anything else is a file path. Geometric ops change the image shape — put
+them before a fit, since points picked earlier no longer line up.
 Without `--points`, `fit` only reports the processed image stats.
 
 Module form (no install step): `python -m dfxm.cli ...`, `python -m dfxm.gui`.

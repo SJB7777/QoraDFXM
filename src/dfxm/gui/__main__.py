@@ -28,7 +28,7 @@ def main(files=None) -> int:
         import ctypes
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("dfxm.opticalc")
-    except (AttributeError, OSError):
+    except AttributeError, OSError:
         pass  # not Windows, or the shell refused — cosmetic only
 
     app = QtWidgets.QApplication(sys.argv[:1])

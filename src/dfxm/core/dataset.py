@@ -23,7 +23,7 @@ import numpy as np
 
 from . import io as _io
 from .history import History
-from .ops import BG_KINDS, Operation, apply_op
+from .ops import BG_KINDS, NONLINEAR_KINDS, Operation, apply_op
 from .results import FitResult
 
 
@@ -99,6 +99,23 @@ class DFXMDataset:
     def normalize(self) -> DFXMDataset:
         return self._add_op("normalize")
 
+    # -------------------------------------------------- geometric (warp)
+    # These change the image SHAPE, so anything picked on the old grid (fit
+    # points, ROIs) no longer lines up — apply them before fitting.
+    def scale(self, sx: float, sy: float | None = None, interp="auto") -> DFXMDataset:
+        """Resize by factors; ``sx != sy`` changes the aspect ratio."""
+        return self._add_op(
+            "scale", sx=float(sx), sy=float(sx if sy is None else sy), interp=interp
+        )
+
+    def rotate(self, angle_deg: float, expand: bool = True) -> DFXMDataset:
+        """Rotate about the centre, positive = counter-clockwise."""
+        return self._add_op("rotate", angle=float(angle_deg), expand=bool(expand))
+
+    def flip(self, axis: str = "h") -> DFXMDataset:
+        """Mirror: ``h`` (left↔right), ``v`` (top↔bottom) or ``both``."""
+        return self._add_op("flip", axis=axis)
+
     def add_op(self, kind: str, **params) -> DFXMDataset:
         """Generic append (used when replaying a GUI/serialized recipe)."""
         return self._add_op(kind, **params)
@@ -106,6 +123,28 @@ class DFXMDataset:
     def fit_ellipse(self, points) -> DFXMDataset:
         """Fit an ellipse to picked points (on the PROCESSED image)."""
         return self._with(fit=FitResult.from_points(points))
+
+    # ------------------------------------------------------ measurements
+    def linear_view(self) -> DFXMDataset:
+        """Same recipe with the intensity-bending ops (log/sqrt/gamma) dropped.
+
+        Geometry and background correction are kept, so coordinates picked on
+        the displayed image still line up — but the values are linear again,
+        which is what any quantitative measurement needs.
+        """
+        ops = [op for op in self.history if op.kind not in NONLINEAR_KINDS]
+        return self.set_history(History(tuple(ops)))
+
+    def ring_profile(self, **kw):
+        """Brightness along the fitted ellipse vs. its scale (see core.profile).
+
+        Always measured on :meth:`linear_view`; requires a fit.
+        """
+        from .profile import ring_profile as _ring_profile
+
+        if self.fit is None:
+            raise ValueError("no ellipse fit on this dataset — fit first")
+        return _ring_profile(self.linear_view().image, self.fit, **kw)
 
     # ------------------------------------------------------ history ops
     def undo(self) -> DFXMDataset:

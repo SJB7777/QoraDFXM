@@ -24,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-from ..core import DFXMDataset, ResultsFrame
+from ..core import MASTER_COLUMNS, DFXMDataset, FitResult, ResultsFrame, ring_profile
 from ..core import io as core_io
 from .spec import OP_ARG_HELP, SpecError, parse_ops
 
@@ -69,6 +69,80 @@ def cmd_fit(args) -> int:
         print(f"wrote {args.out} ({len(rf)} row)")
     else:
         print(json.dumps(rec, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _parse_k(text: str) -> tuple[float, float, float]:
+    """``"0.2:2.0:0.01"`` → (start, stop, step)."""
+    parts = text.split(":")
+    if len(parts) != 3:
+        raise SystemExit(f"--k must be START:STOP:STEP (got '{text}')")
+    try:
+        return tuple(float(p) for p in parts)  # type: ignore[return-value]
+    except ValueError:
+        raise SystemExit(f"--k values must be numbers (got '{text}')") from None
+
+
+def _ellipse_from_csv(csv_path: str, shot_id: str | None) -> dict:
+    """Reuse an ellipse the GUI already fitted, straight from the Master CSV."""
+    rf = ResultsFrame.from_csv(csv_path)
+    if not len(rf):
+        raise SystemExit(f"{csv_path} has no rows")
+    r = 0 if shot_id is None else rf.index_of(shot_id)
+    if r is None:
+        raise SystemExit(f"shot_id '{shot_id}' not found in {csv_path}")
+    return {c: rf.get_cell(r, c) for c in MASTER_COLUMNS}
+
+
+def cmd_ring(args) -> int:
+    """Mean brightness along the fitted ellipse, swept over its scale k."""
+    ds = _load_dataset(Path(args.file), args.dataset)
+    ds = _apply_ops(ds, args.op)
+    if not args.keep_log:
+        ds = ds.linear_view()  # quantitative measurement → linear intensity
+
+    if args.from_csv:
+        fit = _ellipse_from_csv(args.from_csv, args.shot_id)
+    elif args.points:
+        pts = json.loads(Path(args.points).read_text(encoding="utf-8"))
+        fit = FitResult.from_points(pts)
+    else:
+        raise SystemExit("need --points PTS.json or --from-csv MASTER.csv")
+
+    prof = ring_profile(
+        ds.image,
+        fit,
+        k=_parse_k(args.k),
+        n_theta=args.angles,
+        width=args.width,
+        width_unit=args.width_unit,
+        n_sub=args.n_sub,
+        keep_map=bool(args.map),
+    )
+
+    kp, ip = prof.peak()
+    print(f"shot_id  : {ds.meta.get('shot_id')}")
+    print(
+        f"ellipse  : a={prof.params['semi_major_axis']:.2f} "
+        f"b={prof.params['semi_minor_axis']:.2f} px, "
+        f"angle={prof.params['angle_deg']:.2f}°"
+    )
+    print(f"k range  : {prof.k[0]:g} … {prof.k[-1]:g}  ({len(prof)} steps)")
+    print(
+        f"peak     : k={kp:.4f} (a·k={kp * prof.params['semi_major_axis']:.2f} px)  "
+        f"I={ip:.6g}  FWHM={prof.fwhm():.4f} k"
+    )
+    if (worst := float(prof.valid_frac.min())) < 1.0:
+        print(f"note     : some rings leave the image (min valid fraction {worst:.2f})")
+
+    if args.out:
+        prof.to_csv(args.out)
+        print(f"wrote {args.out} ({len(prof)} rows)")
+    if args.map:
+        core_io.save_tif(prof.map, args.map)
+        print(
+            f"wrote {args.map} (I(k, theta), {prof.map.shape[0]}×{prof.map.shape[1]})"
+        )
     return 0
 
 
@@ -151,6 +225,30 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--points", help="JSON file of [[x,y],...] to fit an ellipse")
     f.add_argument("--out", help="write the result row to this CSV")
     f.set_defaults(func=cmd_fit)
+
+    r = sub.add_parser(
+        "ring", help="brightness along the fitted ellipse vs. its scale k"
+    )
+    r.add_argument("file", help="HDF5 or image file")
+    r.add_argument("--dataset", help="HDF5 dataset path (default: first frame)")
+    r.add_argument("--op", action="append", metavar="KIND[:SRC]", help=OP_ARG_HELP)
+    r.add_argument("--points", help="JSON file of [[x,y],...] to fit the ellipse from")
+    r.add_argument("--from-csv", help="reuse an ellipse from a Master CSV instead")
+    r.add_argument("--shot-id", help="which row of --from-csv (default: first)")
+    r.add_argument("--k", default="0.2:2.0:0.01", metavar="START:STOP:STEP")
+    r.add_argument("--angles", type=int, default=720, help="samples around the ring")
+    r.add_argument("--width", type=float, default=0.0, help="ring thickness (0 = line)")
+    r.add_argument("--width-unit", choices=("px", "k"), default="px")
+    r.add_argument("--n-sub", type=int, default=3, help="sub-rings across --width")
+    r.add_argument(
+        "--keep-log",
+        action="store_true",
+        help="measure on the nonlinear (log/gamma) image — off by default because "
+        "mean(log I) != log(mean I)",
+    )
+    r.add_argument("--out", help="write the profile to this CSV")
+    r.add_argument("--map", help="write the unrolled I(k, theta) image to this TIFF")
+    r.set_defaults(func=cmd_ring)
 
     c = sub.add_parser("convert", help="export HDF5 detector frames to TIFF")
     c.add_argument("src", help="an .h5 file or a directory of them")

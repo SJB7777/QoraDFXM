@@ -15,11 +15,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..core import DFXMDataset, io
 from ..core.history import History
+from ..core.ops import GEOMETRIC_KINDS
 from ..core.results import MASTER_COLUMNS, ResultsFrame
 from .icons import AppIcons, logo_icon, logo_pixmap
 from .image_view import COLORMAPS, ImageView
 from .models import COLUMN_LABELS, MasterTableModel
 from .results_window import DropTableView, ResultsWindow
+from .ring_panel import RingProfilePanel
 from .roi import EllipseFitROI, LineProfileROI, RectRegionROI
 
 APP_NAME = "DFXM OptiCalc"
@@ -693,6 +695,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         doc.ds = doc.ds.add_op(op_type, **(source or {}))
         self._log(f"전처리 추가: {doc.ds.history[-1].label()}  [{doc.file_path.name}]")
+        if op_type in GEOMETRIC_KINDS:
+            # The pixel grid moved: anything picked on the old grid is stale.
+            self._status.showMessage(
+                "기하 변형 적용 — 좌표계가 바뀌었으니 ROI/타원피팅은 다시 지정하세요",
+                6000,
+            )
         self._after_preproc_change(doc)
 
     def _preproc_remove_at(self, doc, idx: int) -> None:
@@ -724,6 +732,7 @@ class MainWindow(QtWidgets.QMainWindow):
             with QtCore.QSignalBlocker(self._log_chk):
                 self._log_chk.setChecked(doc.ds.log_scale)
             self._inspector_fill()
+            self._ring_update()  # recipe changed → the measured image changed
         self._rebuild_object_tree()
 
     def _do_overmax(self, b) -> None:
@@ -812,6 +821,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         doc.add_roi(roi)  # register BEFORE canvas add (rebuild reads the session)
         v.add_roi_item(roi)
+        if roi.roi_type == "ellipse":
+            # Dragging / resizing the ellipse re-measures the ring profile.
+            roi.sigRegionChanged.connect(self._ring_update)
+            self._ring_update()
         doc.add_log(f"ROI 추가: {roi.name} [{roi.roi_id}]")
         self._refresh_log()
 
@@ -1069,6 +1082,26 @@ class MainWindow(QtWidgets.QMainWindow):
         if ok:
             self._preproc_add(doc, "gamma", {"gamma": float(g)})
 
+    def _add_scale(self, doc) -> None:
+        """비율/크기 변형 — 가로·세로 배율을 따로 받는다 (같게 주면 단순 확대·축소)."""
+        sx, ok = QtWidgets.QInputDialog.getDouble(
+            self, "크기·비율 변형", "가로 배율 sx (1.0 = 그대로):", 1.0, 0.01, 20.0, 3
+        )
+        if not ok:
+            return
+        sy, ok = QtWidgets.QInputDialog.getDouble(
+            self, "크기·비율 변형", "세로 배율 sy:", sx, 0.01, 20.0, 3
+        )
+        if ok:
+            self._preproc_add(doc, "scale", {"sx": float(sx), "sy": float(sy)})
+
+    def _add_rotate(self, doc) -> None:
+        ang, ok = QtWidgets.QInputDialog.getDouble(
+            self, "회전", "각도 (도, + = 반시계):", 0.0, -360.0, 360.0, 2
+        )
+        if ok:
+            self._preproc_add(doc, "rotate", {"angle": float(ang), "expand": True})
+
     def _on_obj_context_menu(self, pos: QtCore.QPoint) -> None:
         item = self._obj_tree.itemAt(pos)
         if item is None:
@@ -1087,6 +1120,16 @@ class MainWindow(QtWidgets.QMainWindow):
             menu.addAction("감마 (γ) 추가…", lambda: self._add_gamma(doc))
             menu.addAction(
                 "정규화 (/max) 추가", lambda: self._preproc_add(doc, "normalize")
+            )
+            menu.addSeparator()
+            geo = menu.addMenu("기하 변형")
+            geo.addAction("크기·비율 변형…", lambda: self._add_scale(doc))
+            geo.addAction("회전…", lambda: self._add_rotate(doc))
+            geo.addAction(
+                "좌우 뒤집기", lambda: self._preproc_add(doc, "flip", {"axis": "h"})
+            )
+            geo.addAction(
+                "상하 뒤집기", lambda: self._preproc_add(doc, "flip", {"axis": "v"})
             )
             menu.addSeparator()
             hint = menu.addAction("Dark/Flat: 구조·파일 탭에서 우클릭")
@@ -1321,22 +1364,29 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Data / Table — table is a first-class feature, not just a fit sink.
         self._act_show_table = self._act(
-            "표 보기", self._show_results_table, "결과 표 창 열기")
+            "표 보기", self._show_results_table, "결과 표 창 열기"
+        )
         self._act_new_row = self._act(
-            "빈 줄 추가", self._new_table_row, "빈 줄 추가 후 직접 입력")
+            "빈 줄 추가", self._new_table_row, "빈 줄 추가 후 직접 입력"
+        )
         self._act_populate = self._act(
-            "파일 목록 불러오기", self._populate_shots,
-            "현재 파일의 프레임마다 한 줄씩 생성")
+            "파일 목록 불러오기",
+            self._populate_shots,
+            "현재 파일의 프레임마다 한 줄씩 생성",
+        )
         self._act_exclude = self._act(
-            "제외 표시", self._toggle_exclude, "선택한 줄 제외/포함 전환")
+            "제외 표시", self._toggle_exclude, "선택한 줄 제외/포함 전환"
+        )
         self._act_del_row = self._act(
-            "줄 삭제", self._del_selected_row, "선택한 줄 삭제")
+            "줄 삭제", self._del_selected_row, "선택한 줄 삭제"
+        )
         self._act_clear_table = self._act(
-            "전체 비우기", self._clear_table, "모든 줄 삭제")
+            "전체 비우기", self._clear_table, "모든 줄 삭제"
+        )
         self._act_import_csv = self._act(
-            "CSV 불러오기", self._import_csv, "CSV 파일 → 표")
-        self._act_export_csv = self._act(
-            "CSV 저장", self._export_csv, "표 → CSV 파일")
+            "CSV 불러오기", self._import_csv, "CSV 파일 → 표"
+        )
+        self._act_export_csv = self._act("CSV 저장", self._export_csv, "표 → CSV 파일")
         self._set_action_icon(self._act_show_table, AppIcons.FILE)
         self._set_action_icon(self._act_new_row, AppIcons.CHECK)
         self._set_action_icon(self._act_import_csv, AppIcons.FOLDER)
@@ -1981,8 +2031,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log(f"상태 변경: 행 {r + 1} → {new}")
 
     # ------------------------------------------- shot inspector (sidebar)
-    _INSP_HINT_COLS = {"center_x", "center_y", "major_axis", "minor_axis",
-                       "angle_deg", "fit_error", "points_json"}
+    _INSP_HINT_COLS = {
+        "center_x",
+        "center_y",
+        "major_axis",
+        "minor_axis",
+        "angle_deg",
+        "fit_error",
+        "points_json",
+    }
 
     def _build_shot_inspector(self) -> QtWidgets.QWidget:
         """Editable key/value view of the CURRENT shot → commit as one table row."""
@@ -2003,9 +2060,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         for i, key in enumerate(MASTER_COLUMNS):
             name = QtWidgets.QTableWidgetItem(COLUMN_LABELS.get(key, key))
-            name.setFlags(
-                QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsUserCheckable
-            )
+            name.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsUserCheckable)
             name.setCheckState(QtCore.Qt.Checked)
             name.setData(QtCore.Qt.UserRole, key)
             self._insp.setItem(i, 0, name)
@@ -2095,9 +2150,15 @@ class MainWindow(QtWidgets.QMainWindow):
         """Open the standalone, resizable results-table window (lazy)."""
         if self._results_window is None:
             actions = [
-                self._act_populate, self._act_new_row, None,
-                self._act_exclude, self._act_del_row, self._act_clear_table, None,
-                self._act_import_csv, self._act_export_csv,
+                self._act_populate,
+                self._act_new_row,
+                None,
+                self._act_exclude,
+                self._act_del_row,
+                self._act_clear_table,
+                None,
+                self._act_import_csv,
+                self._act_export_csv,
             ]
             self._results_window = ResultsWindow(
                 self._results_table, actions, self._settings, self
@@ -2219,6 +2280,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         tabs.addTab(self._profile_plot, "라인 프로파일")
 
+        # 링 프로파일: 타원 둘레 밝기 I(k). Core measures, this only draws.
+        self._ring_panel = RingProfilePanel(source=self._ring_source)
+        tabs.addTab(self._ring_panel, "링 프로파일")
+
         # 결과 표 lives in its own resizable window (see _show_results_table),
         # not this cramped bottom dock. Build the table widget here though.
         self._build_results_table_widget()
@@ -2232,6 +2297,39 @@ class MainWindow(QtWidgets.QMainWindow):
         self._analysis_dock.setWidget(tabs)
         self.addDockWidget(QtCore.Qt.BottomDockWidgetArea, self._analysis_dock)
         self._analysis_dock.hide()
+
+    # ------------------------------------------------------- 링 프로파일
+    def _linear_image(self, doc):
+        """Current image with the nonlinear display ops stripped (cached).
+
+        A ring profile is a quantitative measurement, so it must run on linear
+        intensity — but on the SAME geometry the user picked the ellipse on.
+        """
+        key = (doc.session_id, json.dumps(doc.ds.history.to_list(), sort_keys=True))
+        cached = getattr(self, "_linear_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        img = doc.ds.linear_view().image
+        self._linear_cache = (key, img)
+        return img
+
+    def _ring_source(self):
+        """(linear image, live ellipse geometry) for the ring panel, or None."""
+        doc = self._cur()
+        if doc is None or doc.ds is None:
+            return None
+        rois = doc.rois_of_type("ellipse")
+        if rois:
+            geom = dict(rois[-1].geometry)  # the ROI the user can drag
+        elif doc.ds.fit is not None and doc.ds.fit.geom:
+            geom = dict(doc.ds.fit.geom)
+        else:
+            return None
+        return self._linear_image(doc), geom
+
+    def _ring_update(self) -> None:
+        if getattr(self, "_ring_panel", None) is not None:
+            self._ring_panel.request_update()
 
     def _log(self, message: str) -> None:
         """Append a log line to the active document session and refresh view."""

@@ -16,17 +16,21 @@ from pathlib import Path
 
 from ..core.io import IMAGE_SUFFIXES
 from ..core.ops import Operation
+from ..core.warp import FLIP_AXES
 
 #: Ops that take no argument at all.
 PLAIN_OPS = ("log", "pure_log", "sqrt", "normalize")
 #: Ops whose argument is a reference frame (dark / flat).
 SOURCE_OPS = ("sub_bg", "divide")
-#: Ops whose argument is a scalar.
-SCALAR_OPS = ("gamma",)
+#: Ops whose argument is one scalar → ``{kind: param_key}``.
+SCALAR_OPS = {"gamma": "gamma", "rotate": "angle"}
+#: Geometric ops with their own little grammar.
+GEOMETRIC_OPS = ("scale", "rotate", "flip")
 
 OP_ARG_HELP = (
     "pipeline op, repeatable & ordered: sub_bg:/dark, divide:flat.tif, "
-    "log, pure_log, sqrt, gamma:0.5, normalize"
+    "log, pure_log, sqrt, gamma:0.5, normalize, "
+    "scale:1.5, scale:2x0.5 (sx × sy), rotate:30 (deg, CCW), flip:h|v|both"
 )
 
 
@@ -46,6 +50,23 @@ def _is_dataset_ref(src: str) -> bool:
     return Path(src).suffix.lower() not in IMAGE_SUFFIXES
 
 
+def _parse_scale(src: str) -> dict:
+    """``"1.5"`` → uniform; ``"2x0.5"`` → sx=2, sy=0.5 (``:`` is taken, so 'x')."""
+    if not src:
+        raise SpecError("op 'scale' needs a factor, e.g. scale:1.5 or scale:2x0.5")
+    parts = src.lower().split("x")
+    if len(parts) > 2:
+        raise SpecError(f"scale takes 'sx' or 'sxXsy' (got '{src}')")
+    try:
+        sx = float(parts[0])
+        sy = float(parts[1]) if len(parts) == 2 else sx
+    except ValueError:
+        raise SpecError(f"scale factors must be numbers (got '{src}')") from None
+    if sx <= 0 or sy <= 0:
+        raise SpecError(f"scale factors must be > 0 (got '{src}')")
+    return {"sx": sx, "sy": sy}
+
+
 def parse_op(spec: str) -> Operation:
     """``"sub_bg:/dark"`` → ``Operation("sub_bg", {"dataset_path": "/dark"})``."""
     kind, _, src = spec.partition(":")  # partition keeps ':' inside "C:\path"
@@ -57,12 +78,23 @@ def parse_op(spec: str) -> Operation:
             raise SpecError(f"op '{kind}' takes no argument (got '{src}')")
         return Operation(kind, {})
 
+    if kind == "scale":
+        return Operation("scale", _parse_scale(src))
+
+    if kind == "flip":
+        axis = src or "h"
+        if axis not in FLIP_AXES:
+            raise SpecError(f"flip axis must be one of {FLIP_AXES} (got '{axis}')")
+        return Operation("flip", {"axis": axis})
+
     if kind in SCALAR_OPS:
+        key = SCALAR_OPS[kind]
+        default = 0.5 if kind == "gamma" else 0.0
         try:
-            value = float(src) if src else 0.5
+            value = float(src) if src else default
         except ValueError:
             raise SpecError(f"op '{kind}' needs a number, e.g. {kind}:0.5") from None
-        return Operation(kind, {kind: value})
+        return Operation(kind, {key: value})
 
     if kind in SOURCE_OPS:
         if not src:
@@ -70,7 +102,7 @@ def parse_op(spec: str) -> Operation:
         key = "dataset_path" if _is_dataset_ref(src) else "file_path"
         return Operation(kind, {key: src})
 
-    known = ", ".join(PLAIN_OPS + SOURCE_OPS + SCALAR_OPS)
+    known = ", ".join(PLAIN_OPS + SOURCE_OPS + tuple(SCALAR_OPS) + GEOMETRIC_OPS)
     raise SpecError(f"unknown op '{kind}' (known: {known})")
 
 
@@ -78,8 +110,15 @@ def format_op(op: Operation) -> str:
     """Inverse of :func:`parse_op` — ``Operation`` → ``"sub_bg:/dark"``."""
     if op.kind in PLAIN_OPS:
         return op.kind
+    if op.kind == "scale":
+        sx = float(op.params.get("sx", 1.0))
+        sy = float(op.params.get("sy", sx))
+        return f"scale:{sx:g}" if sx == sy else f"scale:{sx:g}x{sy:g}"
+    if op.kind == "flip":
+        return f"flip:{op.params.get('axis', 'h')}"
     if op.kind in SCALAR_OPS:
-        return f"{op.kind}:{float(op.params.get(op.kind, 0.5)):g}"
+        key = SCALAR_OPS[op.kind]
+        return f"{op.kind}:{float(op.params.get(key, 0.0)):g}"
     if op.kind in SOURCE_OPS:
         src = op.source
         if not src:
