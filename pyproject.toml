@@ -39,11 +39,19 @@ dev = [
     "dfxm[gui]",        # local dev works on the full app; headless installs skip it
     "ipykernel>=7.3.0",
     "nuitka>=4.1.3",
+    "pytest>=8.4.0",
     "ruff>=0.16.0",
     "taskipy>=1.14.1",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# GUI tests drive the real MainWindow on Qt's offscreen platform; conftest sets
+# QT_QPA_PLATFORM before Qt is imported.
+
 [tool.taskipy.tasks]
 gui = "python -m dfxm.gui"
 cli = "python -m dfxm.cli"
+test = "pytest"
 lint = "ruff check src && ruff format --check src"

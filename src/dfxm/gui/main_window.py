@@ -20,6 +20,7 @@ from ..core.results import MASTER_COLUMNS, ResultsFrame
 from .icons import AppIcons, logo_icon, logo_pixmap
 from .image_view import COLORMAPS, ImageView
 from .models import COLUMN_LABELS, MasterTableModel
+from .prefs import ViewPrefs
 from .results_window import DropTableView, ResultsWindow
 from .ring_panel import RingProfilePanel
 from .roi import EllipseFitROI, LineProfileROI, RectRegionROI
@@ -45,7 +46,7 @@ class DocumentSession:
     logs: list = field(default_factory=list)
     # roi_id -> AnalysisROI (Phase B multi-object management).
     roi_objects: dict = field(default_factory=dict)
-    view_settings: dict = field(default_factory=dict)
+    prefs: ViewPrefs = field(default_factory=ViewPrefs)  # how this doc is drawn
 
     def add_log(self, message: str) -> None:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -476,8 +477,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        self._default_overmax_color: QtGui.QColor = QtGui.QColor("#ff0000")
-
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(logo_icon())
         self.resize(1500, 950)
@@ -489,6 +488,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._master = MasterTableModel(parent=self)
         self._frames: list[io.FramePath] = []
         self._settings = QtCore.QSettings("DFXM", "ImageAnalyzer")
+        # Defaults for documents opened from now on (see gui/prefs.py).
+        self._app_prefs = ViewPrefs.load(self._settings)
         self._theme = self._settings.value("theme", "Dark", type=str)
         self._icon_actions: dict[QtGui.QAction, str] = {}
         self._icon_buttons: dict[QtWidgets.QToolButton, str] = {}
@@ -524,27 +525,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._restore_session()
 
     # ------------------------------------------------------ drag & drop
-    def _default_settings(self) -> dict:
-        """Return initial view settings, inheriting current active control values."""
-        return {
-            # No "log" key: log is an op in doc.ds.history, not a view setting.
-            "overmax": getattr(self, "_overmax_chk", None)
-            and self._overmax_chk.isChecked()
-            or True,
-            "colormap": getattr(self, "_cmap_combo", None)
-            and self._cmap_combo.currentText()
-            or self._settings.value("def_cmap", "gray", type=str),
-            "scale_on": getattr(self, "_scale_chk", None)
-            and self._scale_chk.isChecked()
-            or False,
-            "px_size": getattr(self, "_px_size_spin", None)
-            and self._px_size_spin.value()
-            or 1.0,
-            "unit": getattr(self, "_unit_combo", None)
-            and self._unit_combo.currentText()
-            or self._settings.value("def_unit", "µm", type=str),
-            "tool": getattr(self, "_current_tool", "select"),
-        }
+    def _new_doc_prefs(self) -> ViewPrefs:
+        """What a newly opened document starts with: the app-scoped defaults."""
+        return self._app_prefs.copy(tool=getattr(self, "_current_tool", "select"))
 
     def _urls_have_supported(self, urls) -> bool:
         for u in urls:
@@ -608,7 +591,9 @@ class MainWindow(QtWidgets.QMainWindow):
         vals = dlg.result_values()
         for k, v in vals.items():
             self._settings.setValue(k, v)
-        # Apply display defaults immediately to the panel.
+        # The dialog edits the app-scoped defaults; re-read them, then let the
+        # panel push the new colormap through the normal handler.
+        self._app_prefs = ViewPrefs.load(self._settings)
         self._cmap_combo.setCurrentText(vals["def_cmap"])
         self._status.showMessage("설정 저장됨.", 3000)
 
@@ -734,16 +719,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rebuild_object_tree()
 
     def _do_overmax(self, b) -> None:
-        if (v := self._cur_view()) and (s := self._cur_settings()) is not None:
-            v.set_overmax(b)
-            s["overmax"] = b
-            self._settings.setValue("persistent_overmax", b)
+        self._edit_prefs(overmax=bool(b))
+        if v := self._cur_view():
+            v.set_overmax(bool(b))
 
     def _do_colormap(self, name) -> None:
-        if (v := self._cur_view()) and (s := self._cur_settings()) is not None:
+        self._edit_prefs(colormap=name)
+        if v := self._cur_view():
             v.set_colormap(name)
-            s["colormap"] = name
-            self._settings.setValue("def_cmap", name)
         if not self._cmap_syncing and hasattr(self, "_ribbon_cmap"):
             self._cmap_syncing = True
             self._ribbon_cmap.setCurrentText(name)
@@ -1578,8 +1561,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._current_tool = name
         if v := self._cur_view():
             v.set_tool(name)
-        if (s := self._cur_settings()) is not None and s.get("tool") != name:
-            s["tool"] = name
+        if (p := self._cur_prefs()) is not None and p.tool != name:
+            self._edit_prefs(tool=name)
             self._log(f"도구: {name}")
         page_key, title = self._TOOL_PAGE.get(name, ("view", "도구 옵션"))
         self._tool_stack.setCurrentWidget(self._stack_pages[page_key])
@@ -1755,13 +1738,13 @@ class MainWindow(QtWidgets.QMainWindow):
         dl.addRow(self._log_chk)
 
         self._overmax_chk = QtWidgets.QCheckBox("Over-max Highlight")
-        self._overmax_chk.setChecked(True)
+        self._overmax_chk.setChecked(self._app_prefs.overmax)
         self._overmax_chk.toggled.connect(self._do_overmax)
 
         self._overmax_color_btn = QtWidgets.QPushButton()
         self._overmax_color_btn.setFixedWidth(28)
         self._overmax_color_btn.setFixedHeight(20)
-        self._overmax_color = QtGui.QColor(self._default_overmax_color)
+        self._overmax_color = QtGui.QColor(self._app_prefs.overmax_color)
         self._update_overmax_btn_style()
         self._overmax_color_btn.clicked.connect(self._choose_overmax_color)
 
@@ -1775,6 +1758,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._cmap_combo.setIconSize(QtCore.QSize(96, 14))
         for name in COLORMAPS:
             self._cmap_combo.addItem(self._cmap_icon(name), name)
+        with QtCore.QSignalBlocker(self._cmap_combo):
+            self._cmap_combo.setCurrentText(self._app_prefs.colormap)
         self._cmap_combo.currentTextChanged.connect(self._do_colormap)
         dl.addRow("Colormap", self._cmap_combo)
 
@@ -1802,19 +1787,21 @@ class MainWindow(QtWidgets.QMainWindow):
         sl.setContentsMargins(8, 4, 8, 4)
 
         self._scale_chk = QtWidgets.QCheckBox("실거리 사용 (기본: pixel)")
+        self._scale_chk.setChecked(self._app_prefs.scale_on)
         self._scale_chk.toggled.connect(self._on_scale_changed)
         sl.addRow(self._scale_chk)
 
         self._px_size_spin = QtWidgets.QDoubleSpinBox()
         self._px_size_spin.setDecimals(6)
         self._px_size_spin.setRange(1e-6, 1e6)
-        self._px_size_spin.setValue(1.0)
+        self._px_size_spin.setValue(self._app_prefs.px_size)
         self._px_size_spin.valueChanged.connect(self._on_scale_changed)
         sl.addRow("픽셀당 거리", self._px_size_spin)
 
         self._unit_combo = QtWidgets.QComboBox()
         self._unit_combo.setEditable(True)
         self._unit_combo.addItems(["µm", "nm", "mm", "Å"])
+        self._unit_combo.setCurrentText(self._app_prefs.unit)
         self._unit_combo.currentTextChanged.connect(self._on_scale_changed)
         sl.addRow("단위", self._unit_combo)
         v.addWidget(CollapsibleSection("척도 (Scale bar)", scale))
@@ -1858,12 +1845,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if color.isValid():
             self._overmax_color = color
             self._update_overmax_btn_style()
-            self._settings.setValue("persistent_overmax_color", color.name())
-
+            self._edit_prefs(overmax_color=color.name())
             if v := self._cur_view():
                 v.set_overmax_color(color)
-            if s := self._cur_settings():
-                s["overmax_color"] = color.name()
                 self._log(f"Over-max highlight color: {color.name()}")
 
     # ----- tool pages -----
@@ -2504,23 +2488,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._hist_chk.setEnabled(True)
                 self._hist_chk.setChecked(v.histogram_visible())
 
-    def _apply_settings_to(self, view: ImageView, s: dict, doc=None) -> None:
-        """Apply a session's stored view_settings onto its view.
-
-        Preproc + log are NOT here — they live in doc.ds (Core) and are pushed
-        via update_processed when the recipe changes / a tab is shown."""
-        view.set_overmax(s.get("overmax", True))
-        if "overmax_color" in s:
-            view.set_overmax_color(QtGui.QColor(s["overmax_color"]))
-        view.set_colormap(s.get("colormap", "gray"))
-        if s.get("scale_on"):
-            view.set_scale(s.get("px_size", 1.0), s.get("unit", "µm"))
-        else:
-            view.set_scale_pixels()
-        view.set_tool(s.get("tool", "pan"))
-
-    def _sync_panel_from(self, s: dict) -> None:
-        """Reflect a session's settings in the shared control panel (no signals)."""
+    def _sync_panel_from(self, prefs: ViewPrefs) -> None:
+        """Reflect a document's prefs in the shared control panel (no signals)."""
         widgets = [
             self._log_chk,
             self._overmax_chk,
@@ -2533,26 +2502,38 @@ class MainWindow(QtWidgets.QMainWindow):
             widgets.append(self._ribbon_cmap)
         blockers = [QtCore.QSignalBlocker(x) for x in widgets]
         doc = self._cur()
+        # Log is Core state (an op in the recipe), never a copy kept here.
         self._log_chk.setChecked(bool(doc and doc.ds and doc.ds.log_scale))
-        self._overmax_chk.setChecked(s.get("overmax", True))
-        if "overmax_color" in s:
-            self._overmax_color = QtGui.QColor(s["overmax_color"])
-            self._update_overmax_btn_style()
-
-        self._cmap_combo.setCurrentText(s.get("colormap", "gray"))
+        self._overmax_chk.setChecked(prefs.overmax)
+        self._overmax_color = QtGui.QColor(prefs.overmax_color)
+        self._update_overmax_btn_style()
+        self._cmap_combo.setCurrentText(prefs.colormap)
         if hasattr(self, "_ribbon_cmap"):
-            self._ribbon_cmap.setCurrentText(s.get("colormap", "gray"))
-        self._scale_chk.setChecked(s.get("scale_on", False))
-        self._px_size_spin.setValue(s.get("px_size", 1.0))
-        self._unit_combo.setCurrentText(s.get("unit", "µm"))
+            self._ribbon_cmap.setCurrentText(prefs.colormap)
+        self._scale_chk.setChecked(prefs.scale_on)
+        self._px_size_spin.setValue(prefs.px_size)
+        self._unit_combo.setCurrentText(prefs.unit)
         del blockers
-        tool = s.get("tool", "select")
-        if tool in self._tool_actions:
-            self._tool_actions[tool].setChecked(True)
+        if prefs.tool in self._tool_actions:
+            self._tool_actions[prefs.tool].setChecked(True)
 
-    def _cur_settings(self) -> dict | None:
+    def _cur_prefs(self) -> ViewPrefs | None:
         doc = self._cur()
-        return doc.view_settings if doc and doc.kind == "image" else None
+        return doc.prefs if doc and doc.kind == "image" else None
+
+    def _edit_prefs(self, **changes) -> ViewPrefs | None:
+        """Change a display preference: the current document AND the default.
+
+        A panel widget is not a store — it edits both scopes through here, so
+        the active view, the document, and newly opened documents agree.
+        """
+        self._app_prefs = self._app_prefs.copy(**changes)
+        self._app_prefs.save(self._settings)
+        doc = self._cur()
+        if doc is None or doc.kind != "image":
+            return None
+        doc.prefs = doc.prefs.copy(**changes)
+        return doc.prefs
 
     def open_path(self, path: Path) -> None:
         """Public entry used by the launcher (``dfxm gui FILE ...``)."""
@@ -2666,7 +2647,7 @@ class MainWindow(QtWidgets.QMainWindow):
             frame=frames[0] if frames else None,
             structure=root,
             info=path.name,
-            view_settings=self._default_settings(),
+            prefs=self._new_doc_prefs(),
         )
         if frames:
             img = io.load_frame(path, frames[0])
@@ -2691,7 +2672,7 @@ class MainWindow(QtWidgets.QMainWindow):
             view=view,
             ds=self._make_dataset(path, img, ""),
             info=self._img_info(path, path.suffix.lstrip("."), img),
-            view_settings=self._default_settings(),
+            prefs=self._new_doc_prefs(),
         )
         view.set_image(doc.ds.image)
         doc.add_log(f"열기: {path.name}  {img.shape[1]}×{img.shape[0]}")
@@ -2790,11 +2771,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Log is NOT mirrored here — it lives in doc.ds.history, and
         # _sync_panel_from reads the checkbox back from the recipe.
-        doc.view_settings["overmax"] = self._overmax_chk.isChecked()
-        doc.view_settings["colormap"] = self._cmap_combo.currentText()
-
-        self._sync_panel_from(doc.view_settings)
-        self._apply_settings_to(doc.view, doc.view_settings, doc)
+        self._sync_panel_from(doc.prefs)
+        doc.prefs.apply_to(doc.view)
         self._sync_hist_chk()
         self._rebuild_object_tree()
         self._inspector_fill()
@@ -2849,16 +2827,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self._status.showMessage("클립보드에 복사됨.", 3000)
 
     def _on_scale_changed(self, *_) -> None:
+        prefs = self._edit_prefs(
+            scale_on=self._scale_chk.isChecked(),
+            px_size=self._px_size_spin.value(),
+            unit=self._unit_combo.currentText(),
+        )
         view = self._cur_view()
-        s = self._cur_settings()
-        if view is None or s is None:
+        if view is None or prefs is None:
             return
-        on = self._scale_chk.isChecked()
-        s["scale_on"] = on
-        s["px_size"] = self._px_size_spin.value()
-        s["unit"] = self._unit_combo.currentText()
-        if on:
-            view.set_scale(s["px_size"], s["unit"])
+        if prefs.scale_on:
+            view.set_scale(prefs.px_size, prefs.unit)
         else:
             view.set_scale_pixels()
 
@@ -3002,7 +2980,7 @@ class MainWindow(QtWidgets.QMainWindow):
         doc.view.set_image(doc.ds.image)
         doc.frame = None
         doc.info = self._img_info(doc.file_path, node.path, img)
-        self._apply_settings_to(doc.view, doc.view_settings, doc)
+        doc.prefs.apply_to(doc.view)
         self._pin_tab(self._tabs.currentWidget())
         self._rebuild_object_tree()
         doc.add_log(f"데이터셋 열기: {node.path}")
@@ -3039,7 +3017,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._register_shot(doc)
         doc.view.set_image(doc.ds.image)
         doc.info = self._img_info(doc.file_path, str(frame), img)
-        self._apply_settings_to(doc.view, doc.view_settings, doc)
+        doc.prefs.apply_to(doc.view)
         self._pin_tab(self._tabs.currentWidget())
         self._rebuild_object_tree()
         doc.add_log(f"프레임 전환: {frame}")

@@ -86,6 +86,41 @@ d = ds.to_dict()  # JSON-serializable recipe+result (→ SQLite, Phase 3)
 - `bg_applied` / `log_scale` are derived from the history.
 - `.undo()` → dataset with the last op dropped.
 
+## Who owns which state
+
+Every display bug so far came from the same shape: one setting living in a
+widget, a QSettings key, a document dict, and the recipe at once. Three tiers
+now, and nothing is duplicated across them:
+
+| tier | lives in | examples |
+|---|---|---|
+| document, Core-owned | `doc.ds.history` | log, gamma, sub_bg, scale/rotate/flip |
+| document, view-owned | `doc.prefs` (`gui/prefs.py` `ViewPrefs`) | colormap, over-max, scale bar, tool |
+| app-scoped defaults | `MainWindow._app_prefs` → QSettings | what the *next* opened document starts with |
+
+Consequences worth remembering:
+
+- A panel widget is never a store. Handlers call `_edit_prefs(**changes)`,
+  which updates the app defaults *and* the current document, then push the
+  change to the view. `_sync_panel_from(doc.prefs)` re-reads on tab change.
+- The Log checkbox is a *view* of `ds.log_scale`. Because it is a
+  cross-file preference stored per document, `_make_dataset` applies the op to
+  every newly created dataset — otherwise the box says Log and the pixels are
+  linear (the bug that motivated this split).
+- `ViewPrefs.apply_to(view)` is the only path from prefs to an `ImageView`.
+
+## Tests
+
+`tests/` runs head-less (`QT_QPA_PLATFORM=offscreen`, set in `conftest.py`
+before Qt loads) against synthetic data — a Gaussian ring on a known ellipse —
+so nothing depends on beamline files. `uv run task test`.
+
+Ground truths worth keeping: the ring peak/FWHM/perimeter versus analytic
+values, the arc-length weighting actually correcting the equal-angle bias, the
+CLI op grammar round-tripping, and the GUI regressions (log across files,
+arrow-key preview, per-document prefs). GUI tests wipe QSettings per window —
+`MainWindow` restores `last_file`, which otherwise leaks between tests.
+
 ## GUI ↔ Core contract
 
 - `DocumentSession.ds` is the single data model per open image.
