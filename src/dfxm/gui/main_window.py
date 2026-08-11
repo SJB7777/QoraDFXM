@@ -17,7 +17,7 @@ from ..core import DFXMDataset, io
 from ..core.history import History
 from ..core.ops import GEOMETRIC_KINDS
 from ..core.results import MASTER_COLUMNS, ResultsFrame
-from .icons import AppIcons, logo_icon, logo_pixmap
+from .icons import AppIcons, logo_icon, logo_pixmap, wordmark_pixmap
 from .image_view import COLORMAPS, ImageView
 from .models import COLUMN_LABELS, MasterTableModel
 from .prefs import ViewPrefs
@@ -390,7 +390,8 @@ class SettingsDialog(QtWidgets.QDialog):
         # Brand header: logo + name.
         brand = QtWidgets.QHBoxLayout()
         logo = QtWidgets.QLabel()
-        logo.setPixmap(logo_pixmap(72))
+        dark = self._settings.value("theme", "Dark", type=str) == "Dark"
+        logo.setPixmap(wordmark_pixmap(72, on_dark=dark))  # room for the lockup here
         brand.addWidget(logo)
         title = QtWidgets.QLabel(
             f"<b style='font-size:15pt'>{APP_NAME}</b>"
@@ -1485,6 +1486,7 @@ class MainWindow(QtWidgets.QMainWindow):
         gh.addWidget(self._lang_combo)
         act_set = self._mini(self._act("⚙", self._open_settings, "환경설정"))
         gh.addWidget(act_set)
+        ribbon.setCornerWidget(qa, QtCore.Qt.TopLeftCorner)
         ribbon.setCornerWidget(glob, QtCore.Qt.TopRightCorner)
 
         self.setMenuWidget(ribbon)

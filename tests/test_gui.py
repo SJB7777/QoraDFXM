@@ -29,6 +29,74 @@ def kinds(doc) -> list[str]:
     return [op.kind for op in doc.ds.history]
 
 
+# ---------------------------------------------------------------- branding
+def test_logo_assets_ship_with_the_package():
+    from dfxm.gui.icons import LOGO_FULL_PATH, LOGO_MARK_PATH
+
+    assert LOGO_MARK_PATH.exists() and LOGO_FULL_PATH.exists()
+    # inside the package, so an installed wheel still finds them
+    assert LOGO_MARK_PATH.parent.parent.name == "gui"
+
+
+def test_window_icon_uses_the_artwork_not_the_fallback(main_window):
+    assert not main_window.windowIcon().isNull()
+    assert main_window.windowIcon().availableSizes(), "a raster logo was expected"
+
+
+def test_mark_stays_square_at_icon_sizes(qapp):
+    from dfxm.gui.icons import logo_pixmap
+
+    for size in (16, 22, 64):
+        pm = logo_pixmap(size)
+        assert (pm.width(), pm.height()) == (size, size)
+
+
+def test_wordmark_keeps_its_aspect(qapp):
+    from dfxm.gui.icons import wordmark_pixmap
+
+    pm = wordmark_pixmap(64)
+    assert pm.height() == 64
+    assert pm.width() < pm.height() * 4  # the lockup is portrait-ish, not a banner
+
+
+def test_wordmark_has_a_readable_variant_per_theme(qapp):
+    """The navy wordmark disappears on a dark panel, so a light twin exists."""
+    from PySide6 import QtGui
+
+    from dfxm.gui.icons import wordmark_pixmap
+
+    def mean_lightness(pm):
+        img = pm.toImage().convertToFormat(QtGui.QImage.Format.Format_ARGB32)
+        rows = img.height() * 3 // 4  # the text sits under the badge
+        vals = [
+            img.pixelColor(x, y).lightness()
+            for y in range(rows, img.height())
+            for x in range(0, img.width(), 4)
+            if img.pixelColor(x, y).alpha() > 128
+        ]
+        return sum(vals) / max(1, len(vals))
+
+    assert mean_lightness(wordmark_pixmap(160, on_dark=True)) > mean_lightness(
+        wordmark_pixmap(160, on_dark=False)
+    )
+
+
+def test_quick_access_bar_is_actually_attached(main_window):
+    """It was built and never installed, so the brand mark had nowhere to show."""
+    from PySide6 import QtCore, QtWidgets
+
+    ribbon = main_window.menuWidget()
+    assert isinstance(ribbon, QtWidgets.QTabWidget)
+    corner = ribbon.cornerWidget(QtCore.Qt.TopLeftCorner)
+    assert corner is not None and corner.isVisible()
+    marks = [
+        lbl
+        for lbl in corner.findChildren(QtWidgets.QLabel)
+        if not lbl.pixmap().isNull()
+    ]
+    assert marks, "the brand mark should live in the quick-access bar"
+
+
 # ----------------------------------------------------------- open / tabs
 def test_opening_an_image_creates_a_document(main_window, ring_tif):
     main_window.open_path(ring_tif)
