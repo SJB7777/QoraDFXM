@@ -527,9 +527,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _default_settings(self) -> dict:
         """Return initial view settings, inheriting current active control values."""
         return {
-            "log": getattr(self, "_log_chk", None)
-            and self._log_chk.isChecked()
-            or False,
+            # No "log" key: log is an op in doc.ds.history, not a view setting.
             "overmax": getattr(self, "_overmax_chk", None)
             and self._overmax_chk.isChecked()
             or True,
@@ -1629,6 +1627,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tree.setDragDropMode(QtWidgets.QAbstractItemView.DragOnly)
         self._tree.clicked.connect(self._on_tree_preview)
         self._tree.doubleClicked.connect(self._on_tree_open)
+        self._tree.activated.connect(self._on_tree_open)  # Enter = 확정 열기
+        # Arrow keys move the preview with the selection (VS Code style), but
+        # only while something IS previewing — see _on_tree_current_changed.
+        self._preview_timer = QtCore.QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(150)  # coalesce a held-down arrow key
+        self._preview_timer.timeout.connect(self._preview_current_tree_item)
+        self._tree.selectionModel().currentChanged.connect(
+            self._on_tree_current_changed
+        )
 
         self._tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
@@ -1738,6 +1746,11 @@ class MainWindow(QtWidgets.QMainWindow):
         dl.setContentsMargins(8, 4, 8, 4)
 
         self._log_chk = QtWidgets.QCheckBox("Log scale")
+        # Restore the cross-session preference before wiring the handler (no
+        # document exists yet; _make_dataset applies it to whatever is opened).
+        self._log_chk.setChecked(
+            self._settings.value("persistent_log", False, type=bool)
+        )
         self._log_chk.toggled.connect(self._do_log)
         dl.addRow(self._log_chk)
 
@@ -2685,10 +2698,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._add_tab(view, doc, path.name)
 
     def _make_dataset(self, path, img, label: str):
-        """Wrap a freshly loaded frame in a Core DFXMDataset (raw, no ops yet)."""
+        """Wrap a freshly loaded frame in a Core DFXMDataset.
+
+        Log scale is a display preference that spans files, but it is stored as
+        an op in the per-document recipe — so a new document has to be given
+        one, otherwise the checkbox would say Log while the image is linear.
+        """
         stem = Path(path).stem
         shot = f"{stem}:{label}" if label else stem
-        return DFXMDataset.from_array(img, source_path=path, meta={"shot_id": shot})
+        ds = DFXMDataset.from_array(img, source_path=path, meta={"shot_id": shot})
+        if getattr(self, "_log_chk", None) is not None and self._log_chk.isChecked():
+            ds = ds.apply_log()
+        return ds
 
     def _open_text(self, path: Path) -> None:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -2767,7 +2788,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 if cur is not None:
                     self._det_combo.setCurrentText(cur.detector)
 
-        doc.view_settings["log"] = self._log_chk.isChecked()
+        # Log is NOT mirrored here — it lives in doc.ds.history, and
+        # _sync_panel_from reads the checkbox back from the recipe.
         doc.view_settings["overmax"] = self._overmax_chk.isChecked()
         doc.view_settings["colormap"] = self._cmap_combo.currentText()
 
@@ -2886,6 +2908,31 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._open_document(p, preview=True)
             finally:
                 self._suppress_reveal = False
+
+    def _has_preview_tab(self) -> bool:
+        return any(d.preview for d in self._docs.values())
+
+    def _on_tree_current_changed(self, current, _previous) -> None:
+        """Keyboard navigation re-previews, but never opens on its own.
+
+        If nothing is in preview (every tab pinned, or none open) moving the
+        selection must stay silent — otherwise arrow keys would spam tabs.
+        """
+        if not self._has_preview_tab() or self._tree_path(current) is None:
+            return
+        self._preview_timer.start()
+
+    def _preview_current_tree_item(self) -> None:
+        p = self._tree_path(self._tree.currentIndex())
+        if p is None or not self._has_preview_tab():
+            return
+        self._suppress_reveal = True
+        try:
+            self._open_document(p, preview=True)
+        finally:
+            self._suppress_reveal = False
+        # Opening a document activates its tab; give the arrows back to the tree.
+        self._tree.setFocus(QtCore.Qt.OtherFocusReason)
 
     def _on_tree_open(self, index: QtCore.QModelIndex) -> None:
         if p := self._tree_path(index):
