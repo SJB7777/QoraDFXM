@@ -3006,6 +3006,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tree.setFocus(QtCore.Qt.OtherFocusReason)
 
     def _on_tree_open(self, index: QtCore.QModelIndex) -> None:
+        # A folder dives in: it becomes the tree root. The ">" chevron still
+        # expands in place, so both ways of browsing stay available.
+        folder = Path(self._fs_model.filePath(index))
+        if self._fs_model.isDir(index):
+            self._set_tree_root(folder)
+            self._settings.setValue("last_dir", str(folder))
+            return
         if p := self._tree_path(index):
             self._suppress_reveal = True
             try:

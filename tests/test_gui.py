@@ -273,6 +273,42 @@ def test_up_row_from_a_drive_root_lists_the_drives(main_window, tmp_path):
     assert main_window._tree_root() is None
 
 
+def test_double_clicking_a_folder_reroots_the_tree(main_window, tmp_path, pump):
+    child = tmp_path / "run01"
+    child.mkdir()
+    (child / "deep").mkdir()
+    main_window._set_tree_root(tmp_path)
+    pump(200)
+
+    main_window._on_tree_open(main_window._fs_model.index(str(child)))
+    assert main_window._tree_root() == child
+    assert main_window._settings.value("last_dir") == str(child)
+
+
+def test_expanding_a_folder_leaves_the_root_alone(main_window, tmp_path, pump):
+    """The chevron still browses in place — only opening dives in."""
+    child = tmp_path / "run01"
+    child.mkdir()
+    main_window._set_tree_root(tmp_path)
+    pump(200)
+
+    index = main_window._fs_model.index(str(child))
+    main_window._tree.expand(index)
+    pump(200)
+    assert main_window._tree.isExpanded(index)
+    assert main_window._tree_root() == tmp_path
+
+
+def test_diving_in_and_back_out_returns_where_you_were(main_window, tmp_path, pump):
+    child = tmp_path / "run01"
+    child.mkdir()
+    main_window._set_tree_root(tmp_path)
+    main_window._on_tree_open(main_window._fs_model.index(str(child)))
+    main_window._go_up_dir()
+    pump(200)
+    assert main_window._tree_root() == tmp_path
+
+
 # ------------------------------------------------ explorer arrow-key preview
 def test_arrow_keys_move_the_preview(main_window, three_tifs, pump):
     from PySide6 import QtCore, QtGui, QtWidgets
