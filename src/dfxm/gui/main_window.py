@@ -534,6 +534,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tabs.setMovable(True)
         self._tabs.setDocumentMode(True)
         self._tabs.tabCloseRequested.connect(self._on_tab_close)
+        bar = self._tabs.tabBar()
+        bar.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        bar.customContextMenuRequested.connect(self._on_tab_context_menu)
+        bar.installEventFilter(self)  # middle-click closes, as everywhere else
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self._tabs.tabBarDoubleClicked.connect(
             lambda i: self._pin_tab(self._tabs.widget(i))
@@ -554,7 +558,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setAcceptDrops(True)
         self._overlay = DropOverlay(self)
 
+        self._restore_layout()
         self._restore_session()
+
+    # --------------------------------------------------- window lifecycle
+    def _restore_layout(self) -> None:
+        """Come back the size you left, with the docks where you put them."""
+        geom = self._settings.value("win_geometry")
+        state = self._settings.value("win_state")
+        if geom:
+            self.restoreGeometry(geom)
+        if state:
+            self.restoreState(state)
+
+    def closeEvent(self, event) -> None:
+        self._settings.setValue("win_geometry", self.saveGeometry())
+        self._settings.setValue("win_state", self.saveState())
+        super().closeEvent(event)
+
+    def _update_window_title(self) -> None:
+        doc = self._cur()
+        self.setWindowTitle(f"{doc.file_path.name} — {APP_NAME}" if doc else APP_NAME)
 
     # ------------------------------------------------------ drag & drop
     def _new_doc_prefs(self) -> ViewPrefs:
@@ -1310,6 +1334,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Delete removes selected ROI
         dsc = QtGui.QShortcut(QtGui.QKeySequence.Delete, self)
         dsc.activated.connect(self._delete_selected_roi)
+        self._install_shortcuts()
 
         # Scan / Det selectors.
         self._scan_combo = QtWidgets.QComboBox()
@@ -1605,9 +1630,55 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self._analysis_dock.hide()
 
+    # ------------------------------------------------------- 단축키 / 탭
+    #: (key sequence, handler name, what it does) — also the help table's source.
+    SHORTCUTS: ClassVar[tuple[tuple[str, str, str], ...]] = (
+        ("Ctrl+O", "_open_file", "파일 열기"),
+        ("Ctrl+Shift+O", "_open_folder", "폴더 열기"),
+        ("Ctrl+W", "_close_current_tab", "탭 닫기"),
+        ("Ctrl+S", "_export_processed", "처리된 이미지 저장"),
+        ("Ctrl+Shift+S", "_export_csv", "결과 표 CSV 저장"),
+        ("Ctrl+Tab", "_next_tab", "다음 탭"),
+        ("Ctrl+Shift+Tab", "_prev_tab", "이전 탭"),
+        ("Ctrl+0", "_do_reset", "화면에 맞춤"),
+        ("Ctrl+1", "_do_zoom100", "100% 줌"),
+        ("Ctrl++", "_zoom_in", "확대"),
+        ("Ctrl+=", "_zoom_in", "확대 (= 키)"),
+        ("Ctrl+-", "_zoom_out", "축소"),
+    )
+
+    def _install_shortcuts(self) -> None:
+        for keys, handler, _label in self.SHORTCUTS:
+            sc = QtGui.QShortcut(QtGui.QKeySequence(keys), self)
+            sc.activated.connect(getattr(self, handler))
+
+    def _zoom_in(self) -> None:
+        if v := self._cur_view():
+            v.zoom_in()
+
+    def _zoom_out(self) -> None:
+        if v := self._cur_view():
+            v.zoom_out()
+
+    def _close_current_tab(self) -> None:
+        if self._tabs.count():
+            self._on_tab_close(self._tabs.currentIndex())
+
+    def _step_tab(self, delta: int) -> None:
+        n = self._tabs.count()
+        if n > 1:
+            self._tabs.setCurrentIndex((self._tabs.currentIndex() + delta) % n)
+
+    def _next_tab(self) -> None:
+        self._step_tab(1)
+
+    def _prev_tab(self) -> None:
+        self._step_tab(-1)
+
     # --------------------------------------------------------- file dock
     def _build_file_dock(self) -> None:
         dock = self._file_dock = QtWidgets.QDockWidget("탐색기 (Explorer)", self)
+        dock.setObjectName("FileDock")
         dock.setFeatures(
             QtWidgets.QDockWidget.DockWidgetMovable
             | QtWidgets.QDockWidget.DockWidgetFloatable
@@ -1722,7 +1793,47 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             self._go_up_dir()
             return True
+        if (
+            obj is self._tabs.tabBar()
+            and event.type() == QtCore.QEvent.MouseButtonRelease
+            and event.button() == QtCore.Qt.MiddleButton
+        ):
+            index = obj.tabAt(event.position().toPoint())
+            if index >= 0:
+                self._on_tab_close(index)
+                return True
         return super().eventFilter(obj, event)
+
+    def _on_tab_context_menu(self, pos: QtCore.QPoint) -> None:
+        bar = self._tabs.tabBar()
+        index = bar.tabAt(pos)
+        if index < 0:
+            return
+        doc = self._docs.get(self._tabs.widget(index))
+        menu = QtWidgets.QMenu(self)
+        menu.addAction("닫기", lambda: self._on_tab_close(index))
+        menu.addAction("다른 탭 모두 닫기", lambda: self._close_other_tabs(index))
+        menu.addAction("모두 닫기", self._close_all_tabs)
+        if doc is not None:
+            menu.addSeparator()
+            path = doc.file_path
+            menu.addAction(
+                "경로 복사",
+                lambda: QtWidgets.QApplication.clipboard().setText(str(path)),
+            )
+            menu.addAction("탐색기에서 보기", lambda: self._reveal_in_file_manager(path))
+            menu.addAction("이 폴더를 탐색기 루트로", lambda: self._set_tree_root(path.parent))
+        menu.exec(bar.mapToGlobal(pos))
+
+    def _close_other_tabs(self, keep: int) -> None:
+        keep_widget = self._tabs.widget(keep)
+        for i in reversed(range(self._tabs.count())):
+            if self._tabs.widget(i) is not keep_widget:
+                self._on_tab_close(i)
+
+    def _close_all_tabs(self) -> None:
+        for i in reversed(range(self._tabs.count())):
+            self._on_tab_close(i)
 
     # ------------------------------------------------------- 이름 필터
     def _focus_filter(self) -> None:
@@ -1864,6 +1975,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------ control dock
     def _build_control_dock(self) -> None:
         dock = self._control_dock = QtWidgets.QDockWidget("컨트롤", self)
+        dock.setObjectName("ControlDock")
         dock.setFeatures(
             QtWidgets.QDockWidget.DockWidgetMovable
             | QtWidgets.QDockWidget.DockWidgetFloatable
@@ -2381,6 +2493,51 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._master.remove_row(sel.selectedRows()[0].row())
 
+    def _export_processed(self) -> None:
+        """Save the ACTIVE tab's processed image (recipe applied) to disk.
+
+        TIFF keeps the float32 pixels Core produced; PNG is an 8-bit render
+        stretched with the levels the view is currently showing.
+        """
+        doc = self._cur()
+        if doc is None or doc.kind != "image" or doc.ds is None:
+            self._status.showMessage("먼저 이미지를 여세요.", 3000)
+            return
+        img = np.asarray(doc.ds.image, dtype=np.float32)
+
+        default = Path(self._dialog_start_dir()) / f"{doc.file_path.stem}_proc.tif"
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "처리된 이미지 저장",
+            str(default),
+            "TIFF (*.tif *.tiff);;PNG (*.png)",
+        )
+        if not path:
+            return
+        try:
+            if Path(path).suffix.lower() == ".png":
+                lo, hi = (
+                    doc.view.get_levels()
+                    if doc.view is not None
+                    else (float(img.min()), float(img.max()))
+                )
+                span = (hi - lo) or 1.0
+                u8 = np.clip((img - lo) / span * 255.0, 0, 255).astype(np.uint8)
+                h, w = u8.shape
+                qimg = QtGui.QImage(
+                    u8.tobytes(), w, h, w, QtGui.QImage.Format_Grayscale8
+                )
+                if not qimg.save(path):
+                    raise OSError("QImage.save failed")
+            else:
+                io.save_tif(img, path)
+        except Exception as exc:
+            self._status.showMessage(f"이미지 저장 실패: {exc}", 6000)
+            return
+        self._settings.setValue("last_dir", str(Path(path).parent))
+        self._status.showMessage(f"이미지 저장: {path}", 5000)
+        self._log(f"처리 이미지 내보내기: {path}")
+
     def _export_csv(self) -> None:
         if self._master.rowCount() == 0:
             self._status.showMessage("내보낼 데이터 없음", 4000)
@@ -2405,6 +2562,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # ----------------------------------------------------- analysis dock
     def _build_analysis_dock(self) -> None:
         self._analysis_dock = QtWidgets.QDockWidget("분석 / 로그", self)
+        self._analysis_dock.setObjectName("AnalysisDock")
         self._analysis_dock.setFeatures(
             QtWidgets.QDockWidget.DockWidgetMovable
             | QtWidgets.QDockWidget.DockWidgetFloatable
@@ -2875,6 +3033,7 @@ class MainWindow(QtWidgets.QMainWindow):
         doc = self._cur()
         self._refresh_log()
         if doc is None:
+            self._update_window_title()
             self._info_label.setText("파일을 열어보세요")
             self._struct_tree.clear()
             with (
@@ -2886,6 +3045,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self._current_file = doc.file_path
+        self._update_window_title()
         self._info_label.setText(doc.info or doc.file_path.name)
         self._reveal_in_tree(doc.file_path)
 

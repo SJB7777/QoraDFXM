@@ -509,6 +509,14 @@ class ImageView(QtWidgets.QWidget):
     def autoscale_levels(self) -> None:
         self._recompute_display(autolevel=True)
 
+    def display_array(self) -> np.ndarray | None:
+        """The processed image exactly as displayed (float, pre-colormap)."""
+        return self._display
+
+    def save_display(self, path: str) -> None:
+        """Write the colormapped, level-clipped image at native resolution."""
+        self._image_item.save(path)
+
     # ------------------------------------------------------- histogram panel
     def histogram_visible(self) -> bool:
         return self._hist_visible
