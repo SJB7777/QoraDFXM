@@ -2,7 +2,7 @@
 
 The panel owns no pixel math: it asks its *source* callback for the current
 (linear) image plus the live ellipse geometry, hands both to
-:func:`dfxm.core.profile.ring_profile`, and draws what comes back. Dragging the
+:func:`qoradfxm.core.profile.ring_profile`, and draws what comes back. Dragging the
 ellipse ROI therefore re-measures instead of re-implementing anything.
 
 Updates are coalesced through a short timer so a drag produces a handful of
@@ -195,5 +195,5 @@ class RingProfilePanel(QtWidgets.QWidget):
 
     @property
     def profile(self):
-        """The last computed :class:`~dfxm.core.profile.RingProfile`, or None."""
+        """The last computed :class:`~qoradfxm.core.profile.RingProfile`, or None."""
         return self._profile

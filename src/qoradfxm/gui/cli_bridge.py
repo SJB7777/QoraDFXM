@@ -1,7 +1,7 @@
 """Run CLI jobs from the GUI.
 
 The GUI builds a recipe interactively; batch work then goes back out through
-the *same* command line a user could have typed (:mod:`dfxm.cli`), spawned as a
+the *same* command line a user could have typed (:mod:`qoradfxm.cli`), spawned as a
 child process. Reasons for a subprocess rather than an in-process call:
 
 * a long batch never blocks the event loop, and can be cancelled;
@@ -31,17 +31,17 @@ def _launcher() -> list[str]:
     """How to invoke the CLI: the interpreter, or the frozen exe itself."""
     if getattr(sys, "frozen", False):  # Nuitka / PyInstaller build
         return [sys.executable, "--cli"]
-    return [sys.executable, "-m", "dfxm.cli"]
+    return [sys.executable, "-m", "qoradfxm.cli"]
 
 
 def command_line(argv: list[str]) -> str:
     """The job as a copy-pasteable one-liner (for logs / 'show command')."""
-    parts = ["dfxm", *argv]
+    parts = ["qoradfxm", *argv]
     return " ".join(f'"{p}"' if " " in p else p for p in parts)
 
 
 class CliJob(QtCore.QObject):
-    """One ``dfxm ...`` child process, streamed back as signals."""
+    """One ``qoradfxm ...`` child process, streamed back as signals."""
 
     line = QtCore.Signal(str)  # one line of stdout/stderr
     finished_ok = QtCore.Signal(int)  # exit code (0 == success)

@@ -1,4 +1,4 @@
-"""HDF5 / image loading helpers for DFXM detector images.
+"""HDF5 / image loading helpers for QoraDFXM detector images.
 
 Pure I/O layer — no Qt, no GUI. The files produced by the beamline store one
 or more scans under ``run/``, each holding a ``det`` group with one or more

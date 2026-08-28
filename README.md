@@ -1,4 +1,4 @@
-# DFXM
+# QoraDFXM
 
 Dark-Field X-ray Microscopy detector-image analysis: a pure Python engine with
 two front-ends — a headless CLI and a PySide6 desktop app.
@@ -12,10 +12,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Install
 
 ```bash
-uv sync                     # dev: engine + CLI + GUI (the dev group pulls dfxm[gui])
+uv sync                     # dev: engine + CLI + GUI (the dev group pulls qoradfxm[gui])
 uv sync --no-dev            # headless: engine + CLI only, no Qt
-pip install 'dfxm[gui]'     # desktop app
-pip install dfxm            # batch / beamline machine — no Qt
+pip install 'qoradfxm[gui]'     # desktop app
+pip install qoradfxm            # batch / beamline machine — no Qt
 ```
 
 `cupy` (GPU) is an opt-in extra: `uv sync --extra cuda`.
@@ -23,15 +23,15 @@ pip install dfxm            # batch / beamline machine — no Qt
 ## CLI
 
 ```bash
-dfxm info shot.h5 [--tree]                    # frames, shapes, HDF5 structure
-dfxm convert dat/ -o tif/                     # export detector frames to TIFF
-dfxm fit shot.h5 \
+qoradfxm info shot.h5 [--tree]                    # frames, shapes, HDF5 structure
+qoradfxm convert dat/ -o tif/                     # export detector frames to TIFF
+qoradfxm fit shot.h5 \
     --dataset /run/scan00001/det/eh1hama_img/data \
     --op sub_bg:/dark --op divide:flat.tif --op gamma:0.5 --op log \
     --points pts.json --out results.csv
-dfxm ring shot.h5 --points pts.json \
+qoradfxm ring shot.h5 --points pts.json \
     --k 0.5:2.0:0.005 --width 3 --out ring.csv --map ring_map.tif
-dfxm gui shot.h5                              # launch the desktop app
+qoradfxm gui shot.h5                              # launch the desktop app
 ```
 
 `ring` sweeps the fitted ellipse's scale `k` and reports the mean brightness
@@ -55,14 +55,14 @@ HDF5; anything else is a file path. Geometric ops change the image shape — put
 them before a fit, since points picked earlier no longer line up.
 Without `--points`, `fit` only reports the processed image stats.
 
-Module form (no install step): `python -m dfxm.cli ...`, `python -m dfxm.gui`.
+Module form (no install step): `python -m qoradfxm.cli ...`, `python -m qoradfxm.gui`.
 
 ## Python
 
 ```python
-from dfxm.core import DFXMDataset
+from qoradfxm.core import QoraDFXMDataset
 
-ds = (DFXMDataset.from_h5("shot.h5", "/run/scan00001/det/eh1hama_img/data")
+ds = (QoraDFXMDataset.from_h5("shot.h5", "/run/scan00001/det/eh1hama_img/data")
         .sub_bg(dataset_path="/dark")
         .apply_log()
         .fit_ellipse(points))
@@ -73,6 +73,6 @@ row = ds.to_record()   # one Master-table row
 
 ```bash
 uv run task gui     # launch the app
-uv run task cli     # dfxm CLI
+uv run task cli     # qoradfxm CLI
 uv run task lint    # ruff check + format --check
 ```

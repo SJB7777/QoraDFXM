@@ -1,7 +1,7 @@
 """Qt adapters that expose Core data objects to the UI. View-layer only.
 
 ``MasterTableModel`` is a QAbstractTableModel backed by a Core
-:class:`~dfxm.core.results.ResultsFrame` (the real data). The QTableView renders
+:class:`~qoradfxm.core.results.ResultsFrame` (the real data). The QTableView renders
 this; all data lives in Core.
 """
 

@@ -6,7 +6,7 @@ from PySide6 import QtGui
 # Ships inside the package, so an installed wheel / frozen build finds it too.
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_MARK_PATH = ASSETS_DIR / "logo_mark.png"  # square badge — icons, tabs
-LOGO_FULL_PATH = ASSETS_DIR / "logo_full.png"  # badge + DFXM wordmark
+LOGO_FULL_PATH = ASSETS_DIR / "logo_full.png"  # badge + QoraDFXM wordmark
 # The wordmark is navy: unreadable on a dark panel, so it has a light twin.
 LOGO_FULL_DARK_PATH = ASSETS_DIR / "logo_full_on_dark.png"
 

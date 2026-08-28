@@ -14,7 +14,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ..core import DFXMDataset, io
+from ..core import QoraDFXMDataset, io
 from ..core.history import History
 from ..core.ops import GEOMETRIC_KINDS
 from ..core.results import MASTER_COLUMNS, ResultsFrame
@@ -26,7 +26,7 @@ from .results_window import DropTableView, ResultsWindow
 from .ring_panel import RingProfilePanel
 from .roi import EllipseFitROI, LineProfileROI, RectRegionROI
 
-APP_NAME = "DFXM OptiCalc"
+APP_NAME = "QoraDFXM OptiCalc"
 APP_VERSION = "0.1.0"
 
 
@@ -37,7 +37,7 @@ class DocumentSession:
     file_path: Path
     kind: str  # 'image' | 'text'
     view: ImageView | None = None
-    ds: object = None  # core.DFXMDataset — raw + preproc history + fit
+    ds: object = None  # core.QoraDFXMDataset — raw + preproc history + fit
     frames: list = field(default_factory=list)
     frame: object = None
     structure: object = None
@@ -240,7 +240,7 @@ def build_style(theme: str) -> str:
 
     # qtawesome 체크마크 아이콘을 임시 PNG로 저장하여 QSS에 주입
     check_pix = AppIcons.get_pixmap(AppIcons.CHECK, size=12, color="#ffffff")
-    tmp_check_path = Path(tempfile.gettempdir()) / "dfxm_qta_check.png"
+    tmp_check_path = Path(tempfile.gettempdir()) / "qoradfxm_qta_check.png"
     check_pix.save(str(tmp_check_path))
 
     s = s.replace("%CHECKMARK_ICON%", str(tmp_check_path).replace("\\", "/"))
@@ -519,7 +519,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._shot_map: dict[str, tuple] = {}  # shot_id -> (file_path, FramePath)
         self._master = MasterTableModel(parent=self)
         self._frames: list[io.FramePath] = []
-        self._settings = QtCore.QSettings("DFXM", "ImageAnalyzer")
+        self._settings = QtCore.QSettings("QoraDFXM", "ImageAnalyzer")
         # Defaults for documents opened from now on (see gui/prefs.py).
         self._app_prefs = ViewPrefs.load(self._settings)
         self._theme = self._settings.value("theme", "Dark", type=str)
@@ -2543,7 +2543,7 @@ class MainWindow(QtWidgets.QMainWindow):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "CSV 내보내기",
-            str(Path(start) / "dfxm_results.csv"),
+            str(Path(start) / "qoradfxm_results.csv"),
             "CSV 파일 (*.csv)",
         )
         if not path:
@@ -2842,7 +2842,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return doc.prefs
 
     def open_path(self, path: Path) -> None:
-        """Public entry used by the launcher (``dfxm gui FILE ...``)."""
+        """Public entry used by the launcher (``qoradfxm gui FILE ...``)."""
         self._open_document(Path(path))
 
     def _open_document(self, path: Path, preview: bool = False) -> None:
@@ -2964,7 +2964,7 @@ class MainWindow(QtWidgets.QMainWindow):
             doc.add_log(f"열기: {path.name} ({frames[0]})")
         else:
             view.show_error(
-                "DFXM 프레임 없음\n구조 탭에서 2D 데이터셋을 더블클릭하세요"
+                "QoraDFXM 프레임 없음\n구조 탭에서 2D 데이터셋을 더블클릭하세요"
             )
             doc.add_log(f"열기: {path.name} (프레임 없음)")
         self._add_tab(view, doc, path.name)
@@ -2985,7 +2985,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._add_tab(view, doc, path.name)
 
     def _make_dataset(self, path, img, label: str):
-        """Wrap a freshly loaded frame in a Core DFXMDataset.
+        """Wrap a freshly loaded frame in a Core QoraDFXMDataset.
 
         Log scale is a display preference that spans files, but it is stored as
         an op in the per-document recipe — so a new document has to be given
@@ -2993,7 +2993,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         stem = Path(path).stem
         shot = f"{stem}:{label}" if label else stem
-        ds = DFXMDataset.from_array(img, source_path=path, meta={"shot_id": shot})
+        ds = QoraDFXMDataset.from_array(img, source_path=path, meta={"shot_id": shot})
         if getattr(self, "_log_chk", None) is not None and self._log_chk.isChecked():
             ds = ds.apply_log()
         return ds

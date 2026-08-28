@@ -1,11 +1,11 @@
-"""DFXMDataset — the immutable, fluent domain object.
+"""QoraDFXMDataset — the immutable, fluent domain object.
 
 Every preprocessing method returns a NEW dataset that shares the (never
 mutated) ``raw`` array and carries a grown :class:`History`. Because the recipe
 is data, not code, a dataset supports Replay (rebuild from history), Undo
 (``.undo()`` → parent recipe) and full serialization for SQLite sessions.
 
-    ds = (DFXMDataset.from_h5(path, "/run/s1/det/d/data")
+    ds = (QoraDFXMDataset.from_h5(path, "/run/s1/det/d/data")
             .sub_bg(dataset_path="/dark")
             .divide(file_path="flat.tif")
             .apply_log()
@@ -28,7 +28,7 @@ from .results import FitResult
 
 
 @dataclass
-class DFXMDataset:
+class QoraDFXMDataset:
     raw: np.ndarray
     source_path: Path | None = None  # base for dataset_path refs
     meta: dict = field(default_factory=dict)  # shot_id, frame label, ...
@@ -39,7 +39,7 @@ class DFXMDataset:
 
     # ------------------------------------------------------ constructors
     @classmethod
-    def from_array(cls, arr, source_path=None, meta=None) -> DFXMDataset:
+    def from_array(cls, arr, source_path=None, meta=None) -> QoraDFXMDataset:
         return cls(
             raw=np.asarray(arr, dtype=np.float32),
             source_path=Path(source_path) if source_path else None,
@@ -47,7 +47,7 @@ class DFXMDataset:
         )
 
     @classmethod
-    def from_h5(cls, path, dataset_path, meta=None) -> DFXMDataset:
+    def from_h5(cls, path, dataset_path, meta=None) -> QoraDFXMDataset:
         path = Path(path)
         arr = _io.load_dataset(path, dataset_path)
         m = {"shot_id": f"{path.stem}:{dataset_path}", "dataset_path": dataset_path}
@@ -55,7 +55,7 @@ class DFXMDataset:
         return cls.from_array(arr, source_path=path, meta=m)
 
     @classmethod
-    def from_frame(cls, path, frame: _io.FramePath | None = None) -> DFXMDataset:
+    def from_frame(cls, path, frame: _io.FramePath | None = None) -> QoraDFXMDataset:
         path = Path(path)
         arr = _io.load_frame(path, frame)
         label = str(frame) if frame is not None else "frame0"
@@ -63,69 +63,69 @@ class DFXMDataset:
         return cls.from_array(arr, source_path=path, meta=m)
 
     @classmethod
-    def from_image_file(cls, path) -> DFXMDataset:
+    def from_image_file(cls, path) -> QoraDFXMDataset:
         path = Path(path)
         arr = _io.load_image_file(path)
         return cls.from_array(arr, source_path=path, meta={"shot_id": path.stem})
 
     # ------------------------------------------------------ fluent core
-    def _with(self, **kw) -> DFXMDataset:
+    def _with(self, **kw) -> QoraDFXMDataset:
         """Return a copy with the processed-image cache invalidated."""
         return replace(self, _cache=None, **kw)
 
-    def _add_op(self, kind: str, **params) -> DFXMDataset:
+    def _add_op(self, kind: str, **params) -> QoraDFXMDataset:
         return self._with(history=self.history.add(Operation(kind, params)))
 
-    def sub_bg(self, **source) -> DFXMDataset:
+    def sub_bg(self, **source) -> QoraDFXMDataset:
         """Dark subtract. Source: dataset_path=... or file_path=..."""
         return self._add_op("sub_bg", **source)
 
-    def divide(self, **source) -> DFXMDataset:
+    def divide(self, **source) -> QoraDFXMDataset:
         """Flat-field divide. Source: dataset_path=... or file_path=..."""
         return self._add_op("divide", **source)
 
-    def apply_log(self) -> DFXMDataset:
+    def apply_log(self) -> QoraDFXMDataset:
         return self._add_op("log")
 
-    def pure_log(self) -> DFXMDataset:
+    def pure_log(self) -> QoraDFXMDataset:
         return self._add_op("pure_log")
 
-    def sqrt(self) -> DFXMDataset:
+    def sqrt(self) -> QoraDFXMDataset:
         return self._add_op("sqrt")
 
-    def gamma(self, g: float = 0.5) -> DFXMDataset:
+    def gamma(self, g: float = 0.5) -> QoraDFXMDataset:
         return self._add_op("gamma", gamma=float(g))
 
-    def normalize(self) -> DFXMDataset:
+    def normalize(self) -> QoraDFXMDataset:
         return self._add_op("normalize")
 
     # -------------------------------------------------- geometric (warp)
     # These change the image SHAPE, so anything picked on the old grid (fit
     # points, ROIs) no longer lines up — apply them before fitting.
-    def scale(self, sx: float, sy: float | None = None, interp="auto") -> DFXMDataset:
+    def scale(self, sx: float, sy: float | None = None, interp="auto") -> QoraDFXMDataset:
         """Resize by factors; ``sx != sy`` changes the aspect ratio."""
         return self._add_op(
             "scale", sx=float(sx), sy=float(sx if sy is None else sy), interp=interp
         )
 
-    def rotate(self, angle_deg: float, expand: bool = True) -> DFXMDataset:
+    def rotate(self, angle_deg: float, expand: bool = True) -> QoraDFXMDataset:
         """Rotate about the centre, positive = counter-clockwise."""
         return self._add_op("rotate", angle=float(angle_deg), expand=bool(expand))
 
-    def flip(self, axis: str = "h") -> DFXMDataset:
+    def flip(self, axis: str = "h") -> QoraDFXMDataset:
         """Mirror: ``h`` (left↔right), ``v`` (top↔bottom) or ``both``."""
         return self._add_op("flip", axis=axis)
 
-    def add_op(self, kind: str, **params) -> DFXMDataset:
+    def add_op(self, kind: str, **params) -> QoraDFXMDataset:
         """Generic append (used when replaying a GUI/serialized recipe)."""
         return self._add_op(kind, **params)
 
-    def fit_ellipse(self, points) -> DFXMDataset:
+    def fit_ellipse(self, points) -> QoraDFXMDataset:
         """Fit an ellipse to picked points (on the PROCESSED image)."""
         return self._with(fit=FitResult.from_points(points))
 
     # ------------------------------------------------------ measurements
-    def linear_view(self) -> DFXMDataset:
+    def linear_view(self) -> QoraDFXMDataset:
         """Same recipe with the intensity-bending ops (log/sqrt/gamma) dropped.
 
         Geometry and background correction are kept, so coordinates picked on
@@ -147,15 +147,15 @@ class DFXMDataset:
         return _ring_profile(self.linear_view().image, self.fit, **kw)
 
     # ------------------------------------------------------ history ops
-    def undo(self) -> DFXMDataset:
+    def undo(self) -> QoraDFXMDataset:
         return self._with(history=self.history.pop())
 
-    def set_history(self, history: History) -> DFXMDataset:
+    def set_history(self, history: History) -> QoraDFXMDataset:
         return self._with(history=history)
 
-    def replay(self, history: History) -> DFXMDataset:
+    def replay(self, history: History) -> QoraDFXMDataset:
         """New dataset from the same raw with a given recipe (Replay/Macro)."""
-        return DFXMDataset.from_array(
+        return QoraDFXMDataset.from_array(
             self.raw, source_path=self.source_path, meta=dict(self.meta)
         )._with(history=history)
 
@@ -200,7 +200,7 @@ class DFXMDataset:
         }
 
     @classmethod
-    def from_dict(cls, d: dict, raw=None) -> DFXMDataset:
+    def from_dict(cls, d: dict, raw=None) -> QoraDFXMDataset:
         """Rebuild from a serialized session. If ``raw`` is None it is reloaded
         from ``source_path`` (needs meta['dataset_path'] for h5)."""
         src = d.get("source_path")

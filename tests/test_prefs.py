@@ -6,7 +6,7 @@ import pytest
 import tifffile
 from conftest import make_ring_image
 
-from dfxm.gui.prefs import ViewPrefs
+from qoradfxm.gui.prefs import ViewPrefs
 
 
 class FakeView:
@@ -132,7 +132,7 @@ def test_documents_do_not_share_one_prefs_object(main_window, two_tifs):
 
 
 def test_choice_survives_a_new_window(main_window, two_tifs, qapp):
-    from dfxm.gui.main_window import MainWindow
+    from qoradfxm.gui.main_window import MainWindow
 
     main_window.open_path(two_tifs[0])
     main_window._cmap_combo.setCurrentText("cividis")

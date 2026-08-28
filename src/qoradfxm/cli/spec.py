@@ -2,9 +2,9 @@
 
 One definition of what ``--op sub_bg:/dark`` means, shared by
 
-* the CLI parser (string → :class:`~dfxm.core.ops.Operation`), and
+* the CLI parser (string → :class:`~qoradfxm.core.ops.Operation`), and
 * the GUI, which turns the recipe it built interactively back into an argv and
-  hands it to the CLI as a batch job (:mod:`dfxm.gui.cli_bridge`).
+  hands it to the CLI as a batch job (:mod:`qoradfxm.gui.cli_bridge`).
 
 Keeping both directions here is what makes "the GUI runs the same thing you
 could have typed" true by construction instead of by convention.
@@ -143,7 +143,7 @@ def argv_for_fit(
     points_file=None,
     out=None,
 ) -> list[str]:
-    """Build the argv of a ``dfxm fit`` run (without the ``dfxm`` prog name)."""
+    """Build the argv of a ``qoradfxm fit`` run (without the ``qoradfxm`` prog name)."""
     argv = ["fit", str(file)]
     if dataset_path:
         argv += ["--dataset", dataset_path]
@@ -157,7 +157,7 @@ def argv_for_fit(
 
 
 def argv_for_dataset(ds, *, points_file=None, out=None) -> list[str]:
-    """Turn a live :class:`~dfxm.core.dataset.DFXMDataset` into a ``fit`` argv.
+    """Turn a live :class:`~qoradfxm.core.dataset.QoraDFXMDataset` into a ``fit`` argv.
 
     This is how the GUI replays its own recipe through the CLI. Requires the
     dataset to know where it came from (``source_path``).

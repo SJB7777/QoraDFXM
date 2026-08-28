@@ -137,9 +137,9 @@ def main_window(qapp):
     """
     from PySide6 import QtCore
 
-    from dfxm.gui.main_window import MainWindow
+    from qoradfxm.gui.main_window import MainWindow
 
-    QtCore.QSettings("DFXM", "ImageAnalyzer").clear()
+    QtCore.QSettings("QoraDFXM", "ImageAnalyzer").clear()
     win = MainWindow()
     win.show()
     yield win

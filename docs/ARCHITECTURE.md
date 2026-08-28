@@ -1,9 +1,9 @@
-# DFXM — Engine-First Architecture
+# QoraDFXM — Engine-First Architecture
 
 ## Layers
 
 ```
-src/dfxm/
+src/qoradfxm/
   core/            ← Pure engine. ZERO Qt/GUI imports. numpy/pandas/h5py/tifffile only.
     io.py          h5 / image loading + TIFF export, FramePath, H5Node
     transform.py   intensity transforms (adaptive_log)
@@ -13,32 +13,32 @@ src/dfxm/
     history.py     History — immutable ordered op sequence, JSON (de)serialize
     results.py     FitResult + ResultsFrame (pandas Master table, no Qt)
     profile.py     ring_profile — brightness along the fitted ellipse vs. scale k
-    dataset.py     DFXMDataset — fluent immutable domain object
+    dataset.py     QoraDFXMDataset — fluent immutable domain object
   cli/             ← Headless front-end. Imports Core; never imports Qt.
     __init__.py    subcommands: fit / convert / info / gui, build_parser(), main()
     spec.py        recipe ⇄ argv translation (`--op sub_bg:/dark`), pure
-    __main__.py    python -m dfxm.cli
+    __main__.py    python -m qoradfxm.cli
   gui/             ← View only. Calls Core, reflects results. No pixel math.
-    __main__.py    launcher; `--cli` routes to dfxm.cli (single frozen binary)
-    cli_bridge.py  CliJob — runs `dfxm ...` as a QProcess, streams output
+    __main__.py    launcher; `--cli` routes to qoradfxm.cli (single frozen binary)
+    cli_bridge.py  CliJob — runs `qoradfxm ...` as a QProcess, streams output
     ring_panel.py  링 프로파일 tab — live I(k) plot driven by the ellipse ROI
     models.py      MasterTableModel (QAbstractTableModel) over Core ResultsFrame
     image_view.py  dumb display of a processed ndarray
-    main_window.py orchestration; DocumentSession.ds holds a DFXMDataset
+    main_window.py orchestration; DocumentSession.ds holds a QoraDFXMDataset
 ```
 
 Dependency direction: `core ← cli ← gui`. Nothing points back.
-Verified invariants: `import dfxm.cli` pulls in **no** PySide6; the base install
+Verified invariants: `import qoradfxm.cli` pulls in **no** PySide6; the base install
 has no Qt at all (Qt lives in the `gui` extra).
 
 ## Two front-ends, one engine
 
 | | install | entry point |
 |---|---|---|
-| headless / beamline / batch | `pip install dfxm` | `dfxm fit\|convert\|info` |
-| desktop | `pip install dfxm[gui]` | `dfxm gui`, `dfxm-gui`, `python -m dfxm.gui` |
+| headless / beamline / batch | `pip install qoradfxm` | `qoradfxm fit\|convert\|info` |
+| desktop | `pip install qoradfxm[gui]` | `qoradfxm gui`, `qoradfxm-gui`, `python -m qoradfxm.gui` |
 
-`dfxm gui` imports Qt lazily inside the command, so a Qt-less install still
+`qoradfxm gui` imports Qt lazily inside the command, so a Qt-less install still
 parses every other subcommand and fails with an install hint only if the GUI is
 actually asked for.
 
@@ -61,7 +61,7 @@ A subprocess (rather than an in-process call) keeps the event loop free, makes
 a job cancellable, contains crashes, and yields a printable, reproducible
 command (`command_line(argv)`).
 
-## DFXMDataset — fluent, immutable
+## QoraDFXMDataset — fluent, immutable
 
 Every op returns a NEW dataset sharing the (never-mutated) `raw` array and a
 grown `History`. The recipe is *data, not code* → enables Replay, Undo, and
@@ -69,7 +69,7 @@ SQLite session storage.
 
 ```python
 ds = (
-    DFXMDataset.from_h5(path, "/run/s1/det/d/data")
+    QoraDFXMDataset.from_h5(path, "/run/s1/det/d/data")
     .sub_bg(dataset_path="/dark")  # append op, return new ds
     .divide(file_path="flat.tif")
     .apply_log()
@@ -143,7 +143,7 @@ brightness along the contour — the intensity *per unit contour length*.
   Ramanujan's perimeter (3e-6 relative) and a synthetic Gaussian ring
   (peak `k` exact, FWHM 0.1185 vs analytic 0.1177).
 - **Linear intensity only.** `mean(log I) ≠ log(mean I)`, so both the CLI and
-  the GUI measure through `DFXMDataset.linear_view()`, which drops
+  the GUI measure through `QoraDFXMDataset.linear_view()`, which drops
   `log/pure_log/sqrt/gamma` (`core.ops.NONLINEAR_KINDS`) but keeps geometry and
   background correction — the coordinates still match what the user picked.
 - Sampling is bilinear (`cv2.remap`); samples off the image become NaN and are
@@ -151,7 +151,7 @@ brightness along the contour — the intensity *per unit contour length*.
 - `RingProfile` carries k / mean / std / total / perimeter / valid_frac plus
   `peak()` (parabola-refined) and `fwhm()`, and `keep_map=True` also returns the
   unrolled `I(k, θ)` array.
-- Surfaces: `dfxm ring …` (CSV + optional `--map` TIFF, ellipse from `--points`
+- Surfaces: `qoradfxm ring …` (CSV + optional `--map` TIFF, ellipse from `--points`
   or `--from-csv` a Master row) and the GUI 링 프로파일 tab, which recomputes on
   ellipse-ROI drag through a 120 ms coalescing timer.
 
@@ -167,10 +167,10 @@ fit_error, points_json, bg_applied, log_scale`
   shot_id; `MainWindow._shot_map` maps shot_id → file+frame). Populate shots,
   row-click switches shot (`_goto_shot`), fit auto-updates the row in place,
   EXCLUDE flag (`_toggle_exclude`) survives re-fitting and dims the row.
-- Phase 3: SQLite `.dfxm_proj` autosave/restore via `DFXMDataset.to_dict()` /
+- Phase 3: SQLite `.qoradfxm_proj` autosave/restore via `QoraDFXMDataset.to_dict()` /
   `ResultsFrame`; ROI-drag ↔ table live sync. Undo/Redo already supported by the
-  immutable history. Session persistence belongs in `core/` (a `.dfxm_proj` must
-  be readable headlessly) — the old empty `dfxm/session/` stub was removed.
+  immutable history. Session persistence belongs in `core/` (a `.qoradfxm_proj` must
+  be readable headlessly) — the old empty `qoradfxm/session/` stub was removed.
 - Next for GUI → CLI: a "batch this recipe over N shots" panel on top of
   `CliJob` (queue, progress, cancel) — the plumbing is there, the UI is not.
 

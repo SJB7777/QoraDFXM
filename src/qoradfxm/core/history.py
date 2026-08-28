@@ -1,7 +1,7 @@
 """Immutable ordered sequence of :class:`Operation` — the processing recipe.
 
 Being immutable (a tuple under the hood), every edit returns a new History,
-which is exactly what the immutable :class:`~dfxm.core.dataset.DFXMDataset`
+which is exactly what the immutable :class:`~qoradfxm.core.dataset.QoraDFXMDataset`
 needs. Serializes to / from a plain list for SQLite session storage and Replay.
 """
 

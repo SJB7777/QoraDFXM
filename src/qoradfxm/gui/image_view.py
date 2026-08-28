@@ -5,8 +5,8 @@ Built on pyqtgraph.  A :class:`HistogramLUTItem` gives the histogram plus
 draggable min/max level bars (requirement 3).  Pixels above the chosen max
 are painted red by a separate RGBA overlay so the highlight is independent
 of the chosen colormap (requirement 4).  A log-scale toggle applies
-:func:`dfxm.transform.adaptive_log` (requirement 2).  Ellipse fitting reuses
-the least-squares fitter in :mod:`dfxm.ellipse_fit` (requirement 6).
+:func:`qoradfxm.transform.adaptive_log` (requirement 2).  Ellipse fitting reuses
+the least-squares fitter in :mod:`qoradfxm.ellipse_fit` (requirement 6).
 """
 
 from __future__ import annotations

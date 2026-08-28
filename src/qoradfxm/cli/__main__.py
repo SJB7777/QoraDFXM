@@ -1,4 +1,4 @@
-"""Entry point:  python -m dfxm.cli"""
+"""Entry point:  python -m qoradfxm.cli"""
 
 from __future__ import annotations
 

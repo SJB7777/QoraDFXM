@@ -17,7 +17,7 @@ Two things this module is careful about:
   Every sample is therefore weighted by its arc-length element ``ds/dt``; the
   weighted mean is exactly the intensity per unit length.
 * **Measure on linear data.** ``mean(log I) ≠ log(mean I)``. Strip the display
-  transforms first — :meth:`dfxm.core.dataset.DFXMDataset.linear_view` does
+  transforms first — :meth:`qoradfxm.core.dataset.QoraDFXMDataset.linear_view` does
   that while keeping geometry and background correction.
 
 Pure NumPy + OpenCV (sampling only), no Qt.

@@ -1,6 +1,6 @@
 """Geometric transforms — ops that resample the pixel grid.
 
-Unlike the intensity ops in :mod:`dfxm.core.transform` these change *where* a
+Unlike the intensity ops in :mod:`qoradfxm.core.transform` these change *where* a
 pixel is (and usually the image shape), so they are not commutative with
 anything that references another frame by shape (``sub_bg`` / ``divide``) and
 they invalidate coordinates picked on an earlier version of the image. Order in

@@ -2,7 +2,7 @@
 
 ``ResultsFrame`` is the single source of truth for fit results (spec req. 4).
 The GUI's QTableView is a *view* onto it via a thin Qt adapter in
-``dfxm/gui/models.py``; the CLI writes it straight to CSV.
+``qoradfxm/gui/models.py``; the CLI writes it straight to CSV.
 """
 
 from __future__ import annotations

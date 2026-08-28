@@ -31,7 +31,7 @@ def kinds(doc) -> list[str]:
 
 # ---------------------------------------------------------------- branding
 def test_logo_assets_ship_with_the_package():
-    from dfxm.gui.icons import LOGO_FULL_PATH, LOGO_MARK_PATH
+    from qoradfxm.gui.icons import LOGO_FULL_PATH, LOGO_MARK_PATH
 
     assert LOGO_MARK_PATH.exists() and LOGO_FULL_PATH.exists()
     # inside the package, so an installed wheel still finds them
@@ -44,7 +44,7 @@ def test_window_icon_uses_the_artwork_not_the_fallback(main_window):
 
 
 def test_mark_stays_square_at_icon_sizes(qapp):
-    from dfxm.gui.icons import logo_pixmap
+    from qoradfxm.gui.icons import logo_pixmap
 
     for size in (16, 22, 64):
         pm = logo_pixmap(size)
@@ -52,7 +52,7 @@ def test_mark_stays_square_at_icon_sizes(qapp):
 
 
 def test_wordmark_keeps_its_aspect(qapp):
-    from dfxm.gui.icons import wordmark_pixmap
+    from qoradfxm.gui.icons import wordmark_pixmap
 
     pm = wordmark_pixmap(64)
     assert pm.height() == 64
@@ -63,7 +63,7 @@ def test_wordmark_has_a_readable_variant_per_theme(qapp):
     """The navy wordmark disappears on a dark panel, so a light twin exists."""
     from PySide6 import QtGui
 
-    from dfxm.gui.icons import wordmark_pixmap
+    from qoradfxm.gui.icons import wordmark_pixmap
 
     def mean_lightness(pm):
         img = pm.toImage().convertToFormat(QtGui.QImage.Format.Format_ARGB32)
@@ -179,7 +179,7 @@ def test_preproc_ops_are_per_document(main_window, three_tifs):
 
 # ------------------------------------------------------- ring profile tab
 def test_ring_panel_measures_the_active_ellipse(main_window, ring_tif):
-    from dfxm.gui.roi import EllipseFitROI
+    from qoradfxm.gui.roi import EllipseFitROI
 
     main_window.open_path(ring_tif)
     doc = main_window._cur()
@@ -199,7 +199,7 @@ def test_ring_panel_ignores_a_document_without_an_ellipse(main_window, ring_tif)
 
 
 def test_ring_panel_measures_linear_data_even_with_log_on(main_window, ring_tif):
-    from dfxm.gui.roi import EllipseFitROI
+    from qoradfxm.gui.roi import EllipseFitROI
 
     main_window.open_path(ring_tif)
     doc = main_window._cur()

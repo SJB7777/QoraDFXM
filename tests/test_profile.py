@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from conftest import RING_AXES, RING_K, RING_SIGMA, ellipse_geom, ellipse_points
 
-from dfxm.core import DFXMDataset, ring_profile
-from dfxm.core.profile import k_axis
+from qoradfxm.core import QoraDFXMDataset, ring_profile
+from qoradfxm.core.profile import k_axis
 
 
 def ramanujan_perimeter(a: float, b: float) -> float:
@@ -98,7 +98,7 @@ def test_width_averages_sub_rings_and_broadens_the_peak(ring_image):
 
 
 def test_accepts_a_fit_result_and_a_master_row(ring_image):
-    from dfxm.core import FitResult
+    from qoradfxm.core import FitResult
 
     fit = FitResult.from_points(ellipse_points())
     from_fit = ring_profile(ring_image, fit, k=(1.0, 1.6, 0.01))
@@ -125,7 +125,7 @@ def test_k_axis_is_inclusive():
 
 def test_dataset_measures_through_linear_view(ring_image):
     """log/gamma on the display must not change a quantitative measurement."""
-    plain = DFXMDataset.from_array(ring_image).fit_ellipse(ellipse_points())
+    plain = QoraDFXMDataset.from_array(ring_image).fit_ellipse(ellipse_points())
     logged = plain.apply_log().gamma(0.4)
     a = plain.ring_profile(k=(1.0, 1.6, 0.01))
     b = logged.ring_profile(k=(1.0, 1.6, 0.01))

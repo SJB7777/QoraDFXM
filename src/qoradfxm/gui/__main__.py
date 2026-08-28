@@ -1,7 +1,7 @@
-"""Entry point:  python -m dfxm.gui  /  dfxm-gui  /  dfxm gui
+"""Entry point:  python -m qoradfxm.gui  /  qoradfxm-gui  /  qoradfxm gui
 
 The GUI is one of two front-ends over the same Core engine; the other is
-:mod:`dfxm.cli`. A frozen single-file build ships both, so ``--cli`` here
+:mod:`qoradfxm.cli`. A frozen single-file build ships both, so ``--cli`` here
 routes straight to the command line (see ``gui.cli_bridge._launcher``).
 """
 
@@ -27,7 +27,7 @@ def main(files=None) -> int:
     try:
         import ctypes
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("dfxm.opticalc")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("qoradfxm.opticalc")
     except AttributeError, OSError:
         pass  # not Windows, or the shell refused — cosmetic only
 

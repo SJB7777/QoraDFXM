@@ -6,15 +6,15 @@ import numpy as np
 import pytest
 from conftest import DETECTOR_PATH
 
-from dfxm.cli import main
-from dfxm.cli.spec import (
+from qoradfxm.cli import main
+from qoradfxm.cli.spec import (
     SpecError,
     argv_for_dataset,
     format_op,
     parse_op,
     parse_ops,
 )
-from dfxm.core import DFXMDataset
+from qoradfxm.core import QoraDFXMDataset
 
 
 # ------------------------------------------------------------- grammar
@@ -77,7 +77,7 @@ def test_parse_ops_keeps_the_order():
 
 def test_argv_for_dataset_reproduces_the_recipe(tmp_path):
     ds = (
-        DFXMDataset.from_array(
+        QoraDFXMDataset.from_array(
             np.ones((4, 4), np.float32), source_path=tmp_path / "a.tif"
         )
         .scale(2.0, 0.5)
@@ -93,7 +93,7 @@ def test_argv_for_dataset_reproduces_the_recipe(tmp_path):
 
 def test_argv_needs_a_source_path():
     with pytest.raises(SpecError, match="source_path"):
-        argv_for_dataset(DFXMDataset.from_array(np.ones((2, 2), np.float32)))
+        argv_for_dataset(QoraDFXMDataset.from_array(np.ones((2, 2), np.float32)))
 
 
 # ------------------------------------------------------------ commands
@@ -241,5 +241,5 @@ def test_cli_never_imports_qt(ring_tif):
     import subprocess
     import sys
 
-    code = "import sys, dfxm.cli;sys.exit(1 if 'PySide6' in sys.modules else 0)"
+    code = "import sys, qoradfxm.cli;sys.exit(1 if 'PySide6' in sys.modules else 0)"
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0

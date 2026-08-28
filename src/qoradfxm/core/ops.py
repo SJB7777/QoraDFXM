@@ -32,7 +32,7 @@ OP_LABELS = {
 }
 
 # Ops that resample the pixel grid — they change the image shape and invalidate
-# coordinates picked before them (see dfxm.core.warp).
+# coordinates picked before them (see qoradfxm.core.warp).
 GEOMETRIC_KINDS = ("scale", "rotate", "flip")
 
 

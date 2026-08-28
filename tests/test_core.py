@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dfxm.core import DFXMDataset, warp
-from dfxm.core.history import History
-from dfxm.core.ops import GEOMETRIC_KINDS, NONLINEAR_KINDS, Operation, apply_op
-from dfxm.core.transform import adaptive_log
+from qoradfxm.core import QoraDFXMDataset, warp
+from qoradfxm.core.history import History
+from qoradfxm.core.ops import GEOMETRIC_KINDS, NONLINEAR_KINDS, Operation, apply_op
+from qoradfxm.core.transform import adaptive_log
 
 
 @pytest.fixture
@@ -68,15 +68,15 @@ def test_rotate_fill_value_lands_in_the_corners(img):
 
 # --------------------------------------------------------------- recipe
 def test_dataset_ops_are_immutable_and_ordered(img):
-    ds = DFXMDataset.from_array(img)
+    ds = QoraDFXMDataset.from_array(img)
     grown = ds.scale(2.0, 0.5).rotate(15).flip("v")
     assert len(ds.history) == 0, "the original dataset must not change"
     assert [op.kind for op in grown.history] == ["scale", "rotate", "flip"]
 
 
 def test_geometric_ops_survive_serialization(img):
-    ds = DFXMDataset.from_array(img).scale(2.0, 0.5).rotate(30).flip("h")
-    rebuilt = DFXMDataset.from_dict(ds.to_dict(), raw=ds.raw)
+    ds = QoraDFXMDataset.from_array(img).scale(2.0, 0.5).rotate(30).flip("h")
+    rebuilt = QoraDFXMDataset.from_dict(ds.to_dict(), raw=ds.raw)
     assert rebuilt.image.shape == ds.image.shape
     assert np.allclose(rebuilt.image, ds.image, equal_nan=True)
 
@@ -93,32 +93,32 @@ def test_op_labels_show_their_parameters():
 
 
 def test_history_pop_is_undo(img):
-    ds = DFXMDataset.from_array(img).sqrt().rotate(10)
+    ds = QoraDFXMDataset.from_array(img).sqrt().rotate(10)
     assert [op.kind for op in ds.undo().history] == ["sqrt"]
 
 
 def test_replace_history_recomputes_the_image(img):
-    ds = DFXMDataset.from_array(img).scale(2.0)
+    ds = QoraDFXMDataset.from_array(img).scale(2.0)
     plain = ds.set_history(History())
     assert plain.image.shape == img.shape
 
 
 # ------------------------------------------------------- linear_view
 def test_linear_view_drops_only_the_nonlinear_ops(img):
-    ds = DFXMDataset.from_array(img).scale(2.0).apply_log().gamma(0.5).normalize()
+    ds = QoraDFXMDataset.from_array(img).scale(2.0).apply_log().gamma(0.5).normalize()
     kinds = [op.kind for op in ds.linear_view().history]
     assert kinds == ["scale", "normalize"]
     assert all(k not in kinds for k in NONLINEAR_KINDS)
 
 
 def test_linear_view_keeps_the_geometry_so_coordinates_still_match(img):
-    ds = DFXMDataset.from_array(img).scale(2.0, 0.5).apply_log()
+    ds = QoraDFXMDataset.from_array(img).scale(2.0, 0.5).apply_log()
     assert ds.linear_view().image.shape == ds.image.shape
 
 
 def test_ring_profile_requires_a_fit(img):
     with pytest.raises(ValueError, match="no ellipse fit"):
-        DFXMDataset.from_array(img).ring_profile()
+        QoraDFXMDataset.from_array(img).ring_profile()
 
 
 # ----------------------------------------------------------- transform

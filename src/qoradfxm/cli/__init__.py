@@ -1,19 +1,19 @@
-"""DFXM command line — the headless front-end over the Core engine.
+"""QoraDFXM command line — the headless front-end over the Core engine.
 
 This layer never imports Qt. It runs in a plain (GUI-less) install:
 
-    pip install dfxm            # engine + CLI
-    pip install dfxm[gui]       # + the PySide6 desktop app
+    pip install qoradfxm            # engine + CLI
+    pip install qoradfxm[gui]       # + the PySide6 desktop app
 
 Commands::
 
-    dfxm fit shot.h5 --dataset /run/scan00001/det/d/data \
+    qoradfxm fit shot.h5 --dataset /run/scan00001/det/d/data \
         --op sub_bg:/dark --op log --points pts.json --out results.csv
-    dfxm convert dat/ --out-dir tif/          # h5 → tif export
-    dfxm info shot.h5                         # frames / structure
-    dfxm gui shot.h5                          # launch the desktop app
+    qoradfxm convert dat/ --out-dir tif/          # h5 → tif export
+    qoradfxm info shot.h5                         # frames / structure
+    qoradfxm gui shot.h5                          # launch the desktop app
 
-Ops run in the order given. See :mod:`dfxm.cli.spec` for the ``KIND[:SRC]``
+Ops run in the order given. See :mod:`qoradfxm.cli.spec` for the ``KIND[:SRC]``
 grammar; the GUI reuses it to submit its own recipes as CLI jobs.
 """
 
@@ -24,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-from ..core import MASTER_COLUMNS, DFXMDataset, FitResult, ResultsFrame, ring_profile
+from ..core import MASTER_COLUMNS, QoraDFXMDataset, FitResult, ResultsFrame, ring_profile
 from ..core import io as core_io
 from .spec import OP_ARG_HELP, SpecError, parse_ops
 
@@ -32,15 +32,15 @@ __all__ = ["build_parser", "main"]
 
 
 # --------------------------------------------------------------- helpers
-def _load_dataset(path: Path, dataset_path: str | None) -> DFXMDataset:
+def _load_dataset(path: Path, dataset_path: str | None) -> QoraDFXMDataset:
     if dataset_path:
-        return DFXMDataset.from_h5(path, dataset_path)
+        return QoraDFXMDataset.from_h5(path, dataset_path)
     if path.suffix.lower() in core_io.H5_SUFFIXES:
-        return DFXMDataset.from_frame(path)  # first frame
-    return DFXMDataset.from_image_file(path)
+        return QoraDFXMDataset.from_frame(path)  # first frame
+    return QoraDFXMDataset.from_image_file(path)
 
 
-def _apply_ops(ds: DFXMDataset, op_specs) -> DFXMDataset:
+def _apply_ops(ds: QoraDFXMDataset, op_specs) -> QoraDFXMDataset:
     for op in parse_ops(op_specs):
         ds = ds.add_op(op.kind, **op.params)
     return ds
@@ -207,7 +207,7 @@ def cmd_gui(args) -> int:
     except ImportError as exc:  # Qt is imported lazily inside gui_main too
         print(
             f"GUI dependencies are not installed ({exc}).\n"
-            "Install them with:  pip install 'dfxm[gui]'  (or: uv sync --extra gui)",
+            "Install them with:  pip install 'qoradfxm[gui]'  (or: uv sync --extra gui)",
             file=sys.stderr,
         )
         return 1
@@ -218,14 +218,14 @@ def _version() -> str:
     from importlib.metadata import PackageNotFoundError, version
 
     try:
-        return version("dfxm")
+        return version("qoradfxm")
     except PackageNotFoundError:  # running from a source checkout
         return "0.0.0+source"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="dfxm", description="DFXM batch analysis")
-    p.add_argument("-V", "--version", action="version", version=f"dfxm {_version()}")
+    p = argparse.ArgumentParser(prog="qoradfxm", description="QoraDFXM batch analysis")
+    p.add_argument("-V", "--version", action="version", version=f"qoradfxm {_version()}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     f = sub.add_parser("fit", help="preprocess (+ optionally ellipse-fit) a shot")
