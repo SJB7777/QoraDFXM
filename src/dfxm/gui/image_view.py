@@ -515,7 +515,11 @@ class ImageView(QtWidgets.QWidget):
 
     def save_display(self, path: str) -> None:
         """Write the colormapped, level-clipped image at native resolution."""
-        self._image_item.save(path)
+        # ImageItem.save() is a silent no-op until the item has been rendered
+        # once (qimage is None), so render on demand instead of trusting paint.
+        self._image_item.render()
+        if self._image_item.qimage is None or not self._image_item.qimage.save(path):
+            raise OSError("이미지 렌더 저장 실패")
 
     # ------------------------------------------------------- histogram panel
     def histogram_visible(self) -> bool:

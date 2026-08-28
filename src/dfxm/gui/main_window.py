@@ -1821,8 +1821,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 "경로 복사",
                 lambda: QtWidgets.QApplication.clipboard().setText(str(path)),
             )
-            menu.addAction("탐색기에서 보기", lambda: self._reveal_in_file_manager(path))
-            menu.addAction("이 폴더를 탐색기 루트로", lambda: self._set_tree_root(path.parent))
+            menu.addAction(
+                "탐색기에서 보기", lambda: self._reveal_in_file_manager(path)
+            )
+            menu.addAction(
+                "이 폴더를 탐색기 루트로", lambda: self._set_tree_root(path.parent)
+            )
         menu.exec(bar.mapToGlobal(pos))
 
     def _close_other_tabs(self, keep: int) -> None:
@@ -2494,46 +2498,39 @@ class MainWindow(QtWidgets.QMainWindow):
         self._master.remove_row(sel.selectedRows()[0].row())
 
     def _export_processed(self) -> None:
-        """Save the ACTIVE tab's processed image (recipe applied) to disk.
-
-        TIFF keeps the float32 pixels Core produced; PNG is an 8-bit render
-        stretched with the levels the view is currently showing.
-        """
+        """Save the active tab's processed image: TIFF keeps the float data,
+        PNG/JPG keeps what you see (colormap + levels)."""
         doc = self._cur()
-        if doc is None or doc.kind != "image" or doc.ds is None:
+        view = self._cur_view()
+        if doc is None or view is None or not view.has_image():
             self._status.showMessage("먼저 이미지를 여세요.", 3000)
             return
-        img = np.asarray(doc.ds.image, dtype=np.float32)
 
-        default = Path(self._dialog_start_dir()) / f"{doc.file_path.stem}_proc.tif"
+        start = self._dialog_start_dir()
+        default = str(Path(start) / f"{doc.file_path.stem}_processed.tif")
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "처리된 이미지 저장",
-            str(default),
-            "TIFF (*.tif *.tiff);;PNG (*.png)",
+            default,
+            "TIFF - 원본 데이터 (*.tif *.tiff);;PNG - 보이는 대로 (*.png);;"
+            "JPEG - 보이는 대로 (*.jpg)",
         )
         if not path:
             return
+
         try:
-            if Path(path).suffix.lower() == ".png":
-                lo, hi = (
-                    doc.view.get_levels()
-                    if doc.view is not None
-                    else (float(img.min()), float(img.max()))
-                )
-                span = (hi - lo) or 1.0
-                u8 = np.clip((img - lo) / span * 255.0, 0, 255).astype(np.uint8)
-                h, w = u8.shape
-                qimg = QtGui.QImage(
-                    u8.tobytes(), w, h, w, QtGui.QImage.Format_Grayscale8
-                )
-                if not qimg.save(path):
-                    raise OSError("QImage.save failed")
-            else:
+            if Path(path).suffix.lower() in (".tif", ".tiff"):
+                img = doc.ds.image if doc.ds is not None else view.display_array()
+                if img is None:
+                    self._status.showMessage("저장할 이미지 없음", 4000)
+                    return
                 io.save_tif(img, path)
+            else:
+                view.save_display(path)
         except Exception as exc:
             self._status.showMessage(f"이미지 저장 실패: {exc}", 6000)
             return
+
         self._settings.setValue("last_dir", str(Path(path).parent))
         self._status.showMessage(f"이미지 저장: {path}", 5000)
         self._log(f"처리 이미지 내보내기: {path}")
